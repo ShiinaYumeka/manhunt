@@ -1,0 +1,6 @@
+name: manhunt
+version: '${version}'
+
+main: shina.manhunt.Manhunt
+api-version: '1.21.11'
+load: POSTWORLD
