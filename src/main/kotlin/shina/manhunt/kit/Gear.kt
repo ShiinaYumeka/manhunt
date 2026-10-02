@@ -38,16 +38,45 @@ object Gear {
     private val runnerCompass get() = NamespacedKey(Manhunt.instance, "runner_compass")
     private val chestKey get() = NamespacedKey(Manhunt.instance, "team_chest")
     private val giftKey get() = NamespacedKey(Manhunt.instance, "gift")
+    private val rallyKey get() = NamespacedKey(Manhunt.instance, "rally")
+    private val furnaceKey get() = NamespacedKey(Manhunt.instance, "fast_furnace")
 
     fun isKit(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(kitKey, PersistentDataType.BYTE) == true
     fun isHunterCompass(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(hunterCompass, PersistentDataType.BYTE) == true
     fun isRunnerCompass(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(runnerCompass, PersistentDataType.BYTE) == true
     fun isTeamChest(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(chestKey, PersistentDataType.BYTE) == true
     fun isGift(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(giftKey, PersistentDataType.STRING) == true
+    fun isRally(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(rallyKey, PersistentDataType.BYTE) == true
+    fun isFastFurnace(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(furnaceKey, PersistentDataType.BYTE) == true
 
     fun hunterCompass(): ItemStack = named(Material.COMPASS, "猎人指南针", NamedTextColor.RED).also { mark(it, hunterCompass) }
     fun runnerCompass(): ItemStack = named(Material.COMPASS, "结构指南针", NamedTextColor.AQUA).also { mark(it, runnerCompass) }
     fun teamChest(): ItemStack = named(Material.CHEST, "团队仓库", NamedTextColor.GOLD).also { mark(it, chestKey) }
+    fun rallyItem(): ItemStack = named(Material.RECOVERY_COMPASS, "集结", NamedTextColor.AQUA).also {
+        val meta = it.itemMeta
+        meta.lore(listOf(text("右键发起集结", NamedTextColor.GRAY), text("其他人原地等待 5 秒后传送", NamedTextColor.GRAY)))
+        it.itemMeta = meta
+        mark(it, rallyKey)
+    }
+
+    fun fastFurnace(): ItemStack {
+        val item = ItemStack(Material.BLAST_FURNACE)
+        item.setData(DataComponentTypes.ITEM_NAME, text("高速熔炉", NamedTextColor.YELLOW))
+        item.setData(DataComponentTypes.LORE, ItemLore.lore(listOf(
+            text("极速烧炼矿物", NamedTextColor.GRAY),
+            text("*在熔炉边上的每一天都是浪费。", NamedTextColor.GRAY)
+        )))
+        mark(item, furnaceKey)
+        return item
+    }
+
+    fun markFurnace(state: org.bukkit.block.TileState) {
+        state.persistentDataContainer.set(furnaceKey, PersistentDataType.BYTE, 1)
+        state.update(true, false)
+    }
+
+    fun isFastFurnace(state: org.bukkit.block.TileState): Boolean =
+        state.persistentDataContainer.has(furnaceKey, PersistentDataType.BYTE)
 
     fun loadout(session: Session): List<ItemStack> {
         if (!session.early) return emptyList()
@@ -61,41 +90,41 @@ object Gear {
         val items = mutableListOf<ItemStack>()
         when (level) {
             1 -> {
-                items += many(Material.OAK_LOG, 5)
-                items += many(Material.COBBLESTONE, 8)
-                items += many(Material.BREAD, 3)
+                items += many(Material.OAK_LOG, 2)
+                items += many(Material.COBBLESTONE, 4)
+                items += many(Material.BREAD, 1)
                 items += gift("origin", "起源礼盒")
             }
             2 -> {
-                items += many(Material.OAK_LOG, 5)
-                items += many(Material.COBBLESTONE, 10)
+                items += many(Material.OAK_LOG, 2)
+                items += many(Material.COBBLESTONE, 5)
                 items += fixed(Material.STONE_AXE, 1)
                 items += fixed(Material.STONE_PICKAXE, 1)
-                items += many(Material.IRON_INGOT, 2)
+                items += many(Material.IRON_INGOT, 1)
                 items += fixed(damageLeft(Material.GOLDEN_PICKAXE, 10))
-                items += many(Material.BREAD, 10)
-                items += gift(if (session.armor10.isEmpty()) "mid" else "late", if (session.armor10.isEmpty()) "中期起源礼盒" else "末期起源礼盒")
+                items += many(Material.BREAD, 5)
+                items += gift(if (session.armor15.isEmpty()) "mid" else "late", if (session.armor15.isEmpty()) "中期起源礼盒" else "末期起源礼盒")
             }
             3 -> {
-                items += many(Material.OAK_LOG, 10)
-                items += many(Material.COBBLESTONE, 40)
+                items += many(Material.OAK_LOG, 5)
+                items += many(Material.COBBLESTONE, 20)
                 items += fixed(Material.STONE_AXE, 1)
                 items += fixed(Material.STONE_PICKAXE, 1)
                 items += fixed(Material.IRON_CHESTPLATE, 1)
                 items += fixed(Material.IRON_HELMET, 1)
                 items += fixed(Material.IRON_SWORD, 1)
-                items += many(Material.BREAD, 20)
+                items += many(Material.BREAD, 10)
                 items += fixed(Material.SHIELD, 1)
                 items += gift("nether", "下界礼盒")
             }
             4 -> {
-                items += many(Material.OAK_LOG, 16)
-                items += many(Material.COBBLESTONE, 64)
+                items += many(Material.OAK_LOG, 8)
+                items += many(Material.COBBLESTONE, 32)
                 items += fixed(Material.IRON_AXE, 1)
                 items += fixed(Material.IRON_PICKAXE, 1)
                 items += fixed(Material.IRON_SWORD, 1)
-                items += many(Material.BREAD, 10)
-                items += many(Material.COOKED_BEEF, 5)
+                items += many(Material.BREAD, 5)
+                items += many(Material.COOKED_BEEF, 2)
                 items += many(Material.WATER_BUCKET, 1)
                 items += many(Material.LAVA_BUCKET, 1)
                 items += fixed(Material.SHIELD, 1)
@@ -103,12 +132,12 @@ object Gear {
                 if (session.nether) items += gift("nether", "下界礼盒")
             }
         }
-        if (level >= 2 && session.armor10.isNotEmpty()) {
-            val people = session.armor10.size
-            items += many(Material.IRON_INGOT, 3 * people)
-            items += many(Material.BREAD, 10 * people)
-            items += many(Material.COOKED_BEEF, 3 * people)
-            items += many(Material.OAK_LOG, 5 * people)
+        if (level >= 2 && session.armor15.isNotEmpty()) {
+            val people = session.armor15.size
+            items += many(Material.IRON_INGOT, people)
+            items += many(Material.BREAD, 5 * people)
+            items += many(Material.COOKED_BEEF, people)
+            items += many(Material.OAK_LOG, 2 * people)
             if (level != 3) {
                 ironOrder().take(people.coerceAtMost(4)).forEach { items += fixed(it, 1) }
                 val diamonds = (session.armor18.size - 1).coerceAtLeast(0).coerceAtMost(4)

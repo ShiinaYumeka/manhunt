@@ -16,6 +16,8 @@ import org.bukkit.entity.Pose
 import org.bukkit.inventory.EquipmentSlot
 import org.bukkit.inventory.ItemStack
 import org.bukkit.inventory.meta.CompassMeta
+import org.bukkit.potion.PotionEffect
+import org.bukkit.potion.PotionEffectType
 import shina.manhunt.Manhunt
 import shina.manhunt.game.CompassGoal
 import shina.manhunt.game.Phase
@@ -34,8 +36,10 @@ class Ticker(private val plugin: Manhunt) {
         val now = System.currentTimeMillis()
         rememberSpots()
         scanRunners(now)
-        tickDowned()
+        tickDowned(now)
         tickRescue(now)
+        tickGlow()
+        tickRally(now)
         tickHunters(now)
         tickCombat(now)
         tickCompasses()
@@ -70,37 +74,146 @@ class Ticker(private val plugin: Manhunt) {
         player.setCrawling(true)
         session.downed.add(player.uniqueId)
         drain(player, hit)
+        player.world.playSound(player.location, Sound.ENTITY_PLAYER_HURT, 1f, 0.6f)
         player.warnTitle("濒死", "等待救援")
+        for (mate in session.livingRunners()) {
+            if (mate == player) continue
+            mate.playSound(mate, Sound.ENTITY_PLAYER_HURT, 1f, 0.6f)
+            mate.warnTitle("队友倒地", player.name)
+        }
+        shina.manhunt.game.Match.huntersWinIfAllDown(plugin)
     }
 
-    private fun tickDowned() {
-        for (id in plugin.session.downed.toList()) {
+    private fun tickDowned(now: Long) {
+        val session = plugin.session
+        for (id in session.downed.toList()) {
             val player = Bukkit.getPlayer(id) ?: continue
             player.walkSpeed = 0f
             player.setCrawling(true)
             player.velocity = player.velocity.multiply(0)
             drain(player, 1)
+            if (player.isSneaking) {
+                val start = session.giveUpSince.getOrPut(id) { now }
+                val left = ((5000 - (now - start) + 999) / 1000).coerceAtLeast(0)
+                player.sendActionBar(Component.text("按住潜行放弃治疗 $left 秒"))
+                if (now - start >= 5000) {
+                    session.giveUpSince.remove(id)
+                    shina.manhunt.game.Match.eliminate(plugin, player)
+                }
+            } else {
+                session.giveUpSince.remove(id)
+            }
         }
+        shina.manhunt.game.Match.huntersWinIfAllDown(plugin)
+    }
+
+    fun holdingRescue(player: Player): Boolean {
+        val session = plugin.session
+        if (session.phase != Phase.PLAYING || session.role(player.uniqueId) != shina.manhunt.game.Role.RUNNER) return false
+        if (player.uniqueId in session.downed || player.gameMode == GameMode.SPECTATOR) return false
+        if (!player.isSneaking || player.isInWater) return false
+        return rescueTarget(player) != null
+    }
+
+    private fun rescueTarget(rescuer: Player): Player? {
+        val session = plugin.session
+        return session.livingRunners().filter {
+            it.uniqueId in session.downed && it.world == rescuer.world && !it.isInWater && it.location.distance(rescuer.location) <= 4
+        }.minByOrNull { it.location.distanceSquared(rescuer.location) }
     }
 
     private fun tickRescue(now: Long) {
         val session = plugin.session
-        val iterator = session.rescue.iterator()
-        while (iterator.hasNext()) {
-            val (rescuerId, pair) = iterator.next()
-            val (targetId, start) = pair
-            val rescuer = Bukkit.getPlayer(rescuerId)
-            val target = Bukkit.getPlayer(targetId)
-            if (rescuer == null || target == null || rescuer.gameMode == GameMode.SPECTATOR || targetId !in session.downed || rescuer.world != target.world || rescuer.location.distance(target.location) > 4) {
-                iterator.remove()
-                continue
-            }
+        val active = mutableSetOf<java.util.UUID>()
+        for (rescuer in session.livingRunners()) {
+            if (!holdingRescue(rescuer)) continue
+            val target = rescueTarget(rescuer) ?: continue
+            active.add(rescuer.uniqueId)
+            val existing = session.rescue[rescuer.uniqueId]
+            val start = if (existing != null && existing.first == target.uniqueId) existing.second else now
+            session.rescue[rescuer.uniqueId] = target.uniqueId to start
+            rescuer.walkSpeed = 0f
+            rescuer.velocity = rescuer.velocity.multiply(0)
+            val left = ((5000 - (now - start) + 999) / 1000).coerceAtLeast(0)
+            rescuer.sendActionBar(Component.text("按住救援 $left 秒"))
             if (now - start >= 5000) {
-                iterator.remove()
-                session.downed.remove(targetId)
+                session.rescue.remove(rescuer.uniqueId)
+                session.downed.remove(target.uniqueId)
+                session.giveUpSince.remove(target.uniqueId)
+                rescuer.walkSpeed = 0.2f
                 target.walkSpeed = 0.2f
                 target.setCrawling(false)
                 target.sendMessage(Component.text("你被救起了。"))
+            }
+        }
+        for (id in session.rescue.keys.toList()) {
+            if (id in active) continue
+            session.rescue.remove(id)
+            val player = Bukkit.getPlayer(id) ?: continue
+            if (player.uniqueId !in session.downed) player.walkSpeed = 0.2f
+        }
+    }
+
+    private fun tickGlow() {
+        val runners = plugin.session.livingRunners()
+        val glow = PotionEffect(PotionEffectType.GLOWING, 40, 0, true, false, false)
+        for (viewer in runners) {
+            for (mate in runners) {
+                if (mate == viewer) continue
+                viewer.sendPotionEffectChange(mate, glow)
+            }
+        }
+    }
+
+    fun useRally(player: Player) {
+        val session = plugin.session
+        if (session.phase != Phase.PLAYING || session.role(player.uniqueId) != shina.manhunt.game.Role.RUNNER) return
+        if (player.uniqueId in session.downed || player.gameMode == GameMode.SPECTATOR) {
+            player.warnTitle("无法集结", "当前状态不能使用")
+            return
+        }
+        val now = System.currentTimeMillis()
+        val leaderId = session.rallyLeader
+        val leader = leaderId?.let { Bukkit.getPlayer(it) }
+        val live = leaderId != null && now < session.rallyUntil && leader != null &&
+            leaderId !in session.eliminated && leaderId !in session.downed && leaderId != player.uniqueId
+        if (!live) {
+            session.rallyLeader = player.uniqueId
+            session.rallyUntil = now + 60_000
+            session.rallyChannel.remove(player.uniqueId)
+            for (runner in session.livingRunners()) runner.warnTitle("集结", "${player.name} 发起集结")
+            return
+        }
+        session.rallyChannel[player.uniqueId] = player.location.clone() to now
+        player.sendActionBar(Component.text("原地等待 5 秒"))
+    }
+
+    private fun tickRally(now: Long) {
+        val session = plugin.session
+        val leaderId = session.rallyLeader ?: return
+        val leader = Bukkit.getPlayer(leaderId)
+        if (now >= session.rallyUntil || leader == null || leaderId in session.eliminated || leaderId in session.downed) {
+            session.rallyLeader = null
+            session.rallyChannel.clear()
+            return
+        }
+        val iterator = session.rallyChannel.iterator()
+        while (iterator.hasNext()) {
+            val (id, pair) = iterator.next()
+            val (startLoc, start) = pair
+            val player = Bukkit.getPlayer(id)
+            if (player == null || id in session.downed || player.world != startLoc.world || player.location.distanceSquared(startLoc) > 0.36) {
+                iterator.remove()
+                player?.warnTitle("集结中断", "需要留在原地")
+                continue
+            }
+            val left = ((5000 - (now - start) + 999) / 1000).coerceAtLeast(0)
+            player.sendActionBar(Component.text("集结传送 $left 秒"))
+            if (now - start >= 5000) {
+                iterator.remove()
+                player.teleport(leader.location)
+                player.fallDistance = 0f
+                player.sendMessage(Component.text("已传送到 ${leader.name}。").color(NamedTextColor.GREEN))
             }
         }
     }
@@ -122,7 +235,7 @@ class Ticker(private val plugin: Manhunt) {
                 plugin.progress.award(player, "full_iron")
             }
             val armor = player.getAttribute(Attribute.ARMOR)?.value ?: 0.0
-            if (armor >= 10) session.armor10.add(player.uniqueId)
+            if (armor >= 15) session.armor15.add(player.uniqueId)
             if (armor >= 18) session.armor18.add(player.uniqueId)
             if (protection(player) > 8) {
                 session.protectionBlessing = true
@@ -140,7 +253,16 @@ class Ticker(private val plugin: Manhunt) {
         for (hunter in session.hunters()) {
             if (hunter.gameMode == GameMode.SPECTATOR) {
                 val ready = session.respawnReadyAt[hunter.uniqueId]
-                if (ready != null && now >= ready) hunter.sendActionBar(Component.text("右键确认复活"))
+                if (ready != null) {
+                    val allowed = plugin.hunterLoop.respawnAllowed(hunter)
+                    val spot = Component.text(if (allowed) "可以复活" else "不可以复活", if (allowed) NamedTextColor.GREEN else NamedTextColor.RED)
+                    if (now < ready) {
+                        val left = ((ready - now + 999) / 1000).coerceAtLeast(0)
+                        hunter.sendActionBar(Component.text("复活还需 $left 秒  ").append(spot))
+                    } else {
+                        hunter.sendActionBar(if (allowed) Component.text("可以复活，右键确认", NamedTextColor.GREEN) else spot)
+                    }
+                }
                 continue
             }
             if (hunter.inventory.contents.none { it != null && Gear.isHunterCompass(it) }) hunter.inventory.addItem(Gear.hunterCompass())

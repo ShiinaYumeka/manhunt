@@ -86,6 +86,7 @@ object Match {
             player.health = 20.0
             absorb(player)
             player.inventory.addItem(Gear.runnerCompass())
+            player.inventory.addItem(Gear.rallyItem())
             plugin.progress.award(player, "start")
         }
         for (hunter in session.hunters()) {
@@ -103,11 +104,24 @@ object Match {
         if (session.role(player.uniqueId) != Role.RUNNER) return
         if (!session.eliminated.add(player.uniqueId)) return
         session.downed.remove(player.uniqueId)
+        session.giveUpSince.remove(player.uniqueId)
+        session.rescue.entries.removeIf { it.key == player.uniqueId || it.value.first == player.uniqueId }
+        dropBelongings(player)
         player.walkSpeed = 0.2f
         player.setCrawling(false)
         player.gameMode = GameMode.SPECTATOR
         player.warnTitle("淘汰", "你被淘汰了")
         if (session.livingIds().isEmpty() && session.phase == Phase.PLAYING) {
+            session.phase = Phase.ENDED
+            Bukkit.broadcast(Component.text("猎人胜利。").color(NamedTextColor.RED))
+        }
+    }
+
+    fun huntersWinIfAllDown(plugin: Manhunt) {
+        val session = plugin.session
+        if (session.phase != Phase.PLAYING) return
+        val living = session.livingIds()
+        if (living.isNotEmpty() && living.all { it in session.downed }) {
             session.phase = Phase.ENDED
             Bukkit.broadcast(Component.text("猎人胜利。").color(NamedTextColor.RED))
         }
@@ -133,6 +147,16 @@ object Match {
             .append(Component.text(" "))
             .append(link("矿井", "mineshaft"))
         for (player in Bukkit.getOnlinePlayers()) player.sendMessage(message)
+    }
+
+    private fun dropBelongings(player: Player) {
+        val loc = player.location
+        val inventory = player.inventory
+        for (stack in inventory.storageContents + inventory.armorContents + inventory.extraContents) {
+            if (stack == null || stack.type == Material.AIR) continue
+            player.world.dropItemNaturally(loc, stack.clone())
+        }
+        inventory.clear()
     }
 
     private fun absorb(player: Player) {

@@ -67,13 +67,17 @@ class StructureMark(
 
 class Session(val plugin: Manhunt) {
     var phase = Phase.LOBBY
-    var respawnSeconds = 15
+    var respawnSeconds = 35
     var reserveMax = 300
     val roles = mutableMapOf<UUID, Role>()
     val reserve = mutableMapOf<UUID, Int>()
     val eliminated = mutableSetOf<UUID>()
     val downed = mutableSetOf<UUID>()
     val rescue = mutableMapOf<UUID, Pair<UUID, Long>>()
+    val giveUpSince = mutableMapOf<UUID, Long>()
+    var rallyLeader: UUID? = null
+    var rallyUntil = 0L
+    val rallyChannel = mutableMapOf<UUID, Pair<Location, Long>>()
     var startedAt = 0L
     var early = false
     var mid = false
@@ -88,7 +92,7 @@ class Session(val plugin: Manhunt) {
     var netherUnlocked = false
     var lastCombat = 0L
     var combatCountdownEnd: Long? = null
-    val armor10 = mutableSetOf<UUID>()
+    val armor15 = mutableSetOf<UUID>()
     val armor18 = mutableSetOf<UUID>()
     val rewardedVanilla = mutableSetOf<String>()
     val suppress = mutableSetOf<UUID>()

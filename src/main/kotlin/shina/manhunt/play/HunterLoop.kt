@@ -8,6 +8,7 @@ import org.bukkit.GameMode
 import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.World
+import org.bukkit.attribute.Attribute
 import org.bukkit.entity.Player
 import shina.manhunt.Manhunt
 import shina.manhunt.game.Role
@@ -45,7 +46,8 @@ class HunterLoop(private val plugin: Manhunt) {
         }
         session.respawnReadyAt.remove(player.uniqueId)
         player.gameMode = GameMode.SURVIVAL
-        player.health = 20.0
+        player.getAttribute(Attribute.MAX_HEALTH)?.baseValue = 16.0
+        player.health = 16.0
         player.foodLevel = 20
         player.inventory.addItem(Gear.hunterCompass())
         player.inventory.addItem(Gear.teamChest())
@@ -158,6 +160,8 @@ class HunterLoop(private val plugin: Manhunt) {
             block.type = Material.COBBLESTONE
         }
     }
+
+    fun respawnAllowed(hunter: Player): Boolean = invalidReason(hunter) == null
 
     private fun invalidReason(hunter: Player): String? {
         val runners = plugin.session.livingRunners().filter { it.world == hunter.world }

@@ -10,15 +10,16 @@ import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.Difficulty
 import org.bukkit.event.block.Action
+import org.bukkit.event.block.BlockDropItemEvent
 import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.entity.EntityDamageByEntityEvent
 import org.bukkit.event.entity.EntityDamageEvent
 import org.bukkit.event.entity.EntityRegainHealthEvent
 import org.bukkit.event.entity.PlayerDeathEvent
+import org.bukkit.event.inventory.FurnaceStartSmeltEvent
 import org.bukkit.event.player.PlayerAdvancementDoneEvent
 import org.bukkit.event.player.PlayerChangedWorldEvent
 import org.bukkit.event.player.PlayerDropItemEvent
-import org.bukkit.event.player.PlayerInteractEntityEvent
 import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.event.player.PlayerJoinEvent
 import org.bukkit.event.world.WorldLoadEvent
@@ -26,6 +27,7 @@ import org.bukkit.GameRules
 import org.bukkit.event.player.PlayerMoveEvent
 import org.bukkit.event.player.PlayerPortalEvent
 import org.bukkit.event.player.PlayerRespawnEvent
+import org.bukkit.event.player.PlayerToggleSneakEvent
 import org.bukkit.event.player.PlayerTeleportEvent
 import org.bukkit.event.world.LootGenerateEvent
 import org.bukkit.inventory.ItemStack
@@ -53,7 +55,15 @@ class GameListener(private val plugin: Manhunt) : Listener {
         val from = event.from
         if (from.blockX == to.blockX && from.blockY == to.blockY && from.blockZ == to.blockZ) return
         val session = plugin.session
-        if (session.phase == Phase.COUNTDOWN || event.player.uniqueId in session.downed) event.isCancelled = true
+        if (session.phase == Phase.COUNTDOWN || event.player.uniqueId in session.downed) {
+            event.isCancelled = true
+            return
+        }
+        if (event.player.uniqueId in session.rescue || plugin.ticker.holdingRescue(event.player)) {
+            to.x = from.x
+            to.y = from.y
+            to.z = from.z
+        }
     }
 
     @EventHandler
@@ -84,7 +94,9 @@ class GameListener(private val plugin: Manhunt) : Listener {
         }
         if (player.uniqueId in session.downed) {
             event.isCancelled = true
-            plugin.ticker.drain(player, ceil(event.finalDamage).toInt().coerceAtLeast(1))
+            if (event !is EntityDamageByEntityEvent) {
+                plugin.ticker.drain(player, ceil(event.finalDamage).toInt().coerceAtLeast(1))
+            }
             return
         }
         val lethal = event.finalDamage >= player.health + player.absorptionAmount
@@ -108,6 +120,10 @@ class GameListener(private val plugin: Manhunt) : Listener {
         }
         if (session.phase != Phase.PLAYING) return
         val victim = event.entity as? Player ?: return
+        if (victim.uniqueId in session.downed) {
+            event.isCancelled = true
+            return
+        }
         if (attacker == null) return
         val roles = setOf(session.role(victim.uniqueId), session.role(attacker.uniqueId))
         if (roles == setOf(Role.HUNTER, Role.RUNNER) && event.finalDamage > 3) {
@@ -137,7 +153,34 @@ class GameListener(private val plugin: Manhunt) : Listener {
 
     @EventHandler
     fun onPlace(event: BlockPlaceEvent) {
-        if (event.player.uniqueId in plugin.session.downed) event.isCancelled = true
+        if (event.player.uniqueId in plugin.session.downed) {
+            event.isCancelled = true
+            return
+        }
+        if (!Gear.isFastFurnace(event.itemInHand)) return
+        val state = event.blockPlaced.state as? org.bukkit.block.TileState ?: return
+        Gear.markFurnace(state)
+    }
+
+    @EventHandler
+    fun onBreakFurnace(event: BlockDropItemEvent) {
+        val state = event.blockState as? org.bukkit.block.TileState ?: return
+        if (!Gear.isFastFurnace(state)) return
+        for (drop in event.items) {
+            if (drop.itemStack.type == Material.BLAST_FURNACE) drop.itemStack = Gear.fastFurnace()
+        }
+    }
+
+    @EventHandler
+    fun onSmelt(event: FurnaceStartSmeltEvent) {
+        val state = event.block.state as? org.bukkit.block.TileState ?: return
+        if (!Gear.isFastFurnace(state)) return
+        val type = event.source.type
+        when {
+            type.name.endsWith("_ORE") || type == Material.RAW_IRON || type == Material.RAW_GOLD ||
+                type == Material.RAW_COPPER || type == Material.ANCIENT_DEBRIS -> event.totalCookTime = 20
+            type == Material.SAND || type == Material.RED_SAND -> event.totalCookTime = 40
+        }
     }
 
     @EventHandler
@@ -150,6 +193,11 @@ class GameListener(private val plugin: Manhunt) : Listener {
             return
         }
         val item = event.item ?: return
+        if (Gear.isRally(item)) {
+            event.isCancelled = true
+            plugin.ticker.useRally(player)
+            return
+        }
         if (Gear.isGift(item)) {
             event.isCancelled = true
             val hand = event.hand ?: return
@@ -170,16 +218,12 @@ class GameListener(private val plugin: Manhunt) : Listener {
     }
 
     @EventHandler
-    fun onRescue(event: PlayerInteractEntityEvent) {
-        if (event.hand == org.bukkit.inventory.EquipmentSlot.OFF_HAND) return
-        val target = event.rightClicked as? Player ?: return
-        val session = plugin.session
-        if (target.uniqueId !in session.downed) return
-        val rescuer = event.player
-        if (rescuer.gameMode == GameMode.SPECTATOR) return
-        if (session.role(rescuer.uniqueId) != Role.RUNNER || rescuer.uniqueId in session.downed) return
-        session.rescue[rescuer.uniqueId] = target.uniqueId to System.currentTimeMillis()
-        rescuer.sendMessage("正在救援，保持靠近 5 秒。")
+    fun onSneak(event: PlayerToggleSneakEvent) {
+        if (event.isSneaking) return
+        val id = event.player.uniqueId
+        if (plugin.session.rescue.remove(id) != null && id !in plugin.session.downed) {
+            event.player.walkSpeed = 0.2f
+        }
     }
 
     @EventHandler
@@ -197,13 +241,20 @@ class GameListener(private val plugin: Manhunt) : Listener {
         when (session.role(player.uniqueId)) {
             Role.HUNTER -> {
                 event.drops.removeIf { Gear.isHunterCompass(it) || Gear.isTeamChest(it) }
+                val killer = player.killer
+                if (killer != null && session.role(killer.uniqueId) == Role.RUNNER) {
+                    killer.addPotionEffect(PotionEffect(PotionEffectType.REGENERATION, 60, 1, false, true, true))
+                }
                 if (player.uniqueId in session.curseKill) {
                     session.curseKill.remove(player.uniqueId)
                     session.huntCooldownUntil[player.uniqueId] = System.currentTimeMillis() + 60_000
                     session.huntCountdownEnd.remove(player.uniqueId)
                 }
             }
-            Role.RUNNER -> Match.eliminate(plugin, player)
+            Role.RUNNER -> {
+                event.drops.clear()
+                Match.eliminate(plugin, player)
+            }
             null -> Unit
         }
     }

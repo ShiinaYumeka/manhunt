@@ -208,7 +208,7 @@ class Progress(private val plugin: Manhunt) {
             }
             "bread" -> give(player, ItemStack(Material.APPLE, 4))
             "feast" -> give(player, ItemStack(Material.GOLD_INGOT, 4), ItemStack(Material.IRON_INGOT, 3))
-            "miner" -> give(player, ItemStack(Material.FURNACE, 2), ItemStack(Material.COAL, 4))
+            "miner" -> give(player, Gear.fastFurnace())
             "old_miner" -> give(player, ItemStack(Material.BLAST_FURNACE), ItemStack(Material.COAL, 8))
             "got_diamond" -> {
                 session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 10
@@ -471,7 +471,7 @@ class Progress(private val plugin: Manhunt) {
             node("route_mineshaft", "manhunt:full_iron", "前往矿井", "争取获得大量钻石\n奖励：每人废弃矿井指南针、钻石×2、备用血×20", "minecraft:rail"),
             node("bread", "manhunt:start", "饱腹感", "拥有 32 个面包\n奖励：苹果×4", "minecraft:bread"),
             node("feast", "manhunt:start", "烧烤大餐", "拥有 32 个猪排或牛排\n奖励：金锭×4、铁锭×3", "minecraft:cooked_beef"),
-            node("miner", "manhunt:start", "小矿工", "拥有 5 个粗铁\n奖励：熔炉×2、煤炭×4", "minecraft:raw_iron"),
+            node("miner", "manhunt:start", "小矿工", "拥有 5 个粗铁\n奖励：高速熔炉", "minecraft:blast_furnace"),
             node("old_miner", "manhunt:start", "老矿工", "拥有 20 个粗铁\n奖励：高炉×1、煤炭×8", "minecraft:blast_furnace"),
             node("got_diamond", "manhunt:start", "钻石！", "获得钻石\n奖励：铁锭×5、备用血×10", "minecraft:diamond"),
             node("gold_miner", "manhunt:start", "黄金矿工", "获得 30 个粗金\n奖励：高炉×1、煤炭块×2、金苹果×1", "minecraft:raw_gold"),
