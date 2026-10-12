@@ -20,6 +20,9 @@ class StatusBoard(private val plugin: Manhunt) {
         it.displaySlot = DisplaySlot.SIDEBAR
         it.numberFormat(NumberFormat.blank())
     }
+    private val reserveObjective: Objective = board.registerNewObjective("mhreserve", Criteria.DUMMY, Component.text("备用血", NamedTextColor.AQUA)).also {
+        it.displaySlot = DisplaySlot.BELOW_NAME
+    }
     private val runnerTeam: Team = coloredTeam("mh_runners", NamedTextColor.GREEN)
     private val hunterTeam: Team = coloredTeam("mh_hunters", NamedTextColor.RED)
 
@@ -28,12 +31,24 @@ class StatusBoard(private val plugin: Manhunt) {
         syncTeams()
         if (session.phase == Phase.LOBBY) {
             objective.displaySlot = null
+            reserveObjective.displaySlot = null
             for (player in Bukkit.getOnlinePlayers()) {
                 if (player.scoreboard !== board) player.scoreboard = board
             }
             return
         }
         objective.displaySlot = DisplaySlot.SIDEBAR
+        reserveObjective.displaySlot = DisplaySlot.BELOW_NAME
+        val runnerNames = session.roles.filter { it.value == Role.RUNNER }.mapNotNull { Bukkit.getOfflinePlayer(it.key).name }.toSet()
+        for (entry in board.entries.toList()) {
+            if (entry.startsWith("mh")) continue
+            if (entry !in runnerNames) board.resetScores(entry)
+        }
+        for ((id, role) in session.roles) {
+            if (role != Role.RUNNER) continue
+            val name = Bukkit.getOfflinePlayer(id).name ?: continue
+            reserveObjective.getScore(name).score = (session.reserve[id] ?: 0).coerceAtLeast(0)
+        }
         val curse = combatLine()
         val runnerSlots = if (curse == null) MAX_LINES else MAX_LINES - 1
         if (curse != null) {

@@ -10,13 +10,19 @@ import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.Difficulty
 import org.bukkit.event.block.Action
+import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.event.block.BlockDropItemEvent
+import org.bukkit.event.block.BlockExplodeEvent
 import org.bukkit.event.block.BlockPlaceEvent
 import org.bukkit.event.entity.EntityDamageByEntityEvent
+import org.bukkit.event.entity.EntityExplodeEvent
 import org.bukkit.event.entity.EntityDamageEvent
 import org.bukkit.event.entity.EntityRegainHealthEvent
 import org.bukkit.event.entity.PlayerDeathEvent
+import org.bukkit.event.inventory.ClickType
 import org.bukkit.event.inventory.FurnaceStartSmeltEvent
+import org.bukkit.event.inventory.InventoryClickEvent
+import org.bukkit.event.inventory.InventoryDragEvent
 import org.bukkit.event.player.PlayerAdvancementDoneEvent
 import org.bukkit.event.player.PlayerChangedWorldEvent
 import org.bukkit.event.player.PlayerDropItemEvent
@@ -29,6 +35,7 @@ import org.bukkit.event.player.PlayerPortalEvent
 import org.bukkit.event.player.PlayerRespawnEvent
 import org.bukkit.event.player.PlayerToggleSneakEvent
 import org.bukkit.event.player.PlayerTeleportEvent
+import io.papermc.paper.event.player.PlayerTrackEntityEvent
 import org.bukkit.event.world.LootGenerateEvent
 import org.bukkit.inventory.ItemStack
 import org.bukkit.potion.PotionEffect
@@ -37,6 +44,7 @@ import shina.manhunt.Manhunt
 import shina.manhunt.game.Match
 import shina.manhunt.game.Phase
 import shina.manhunt.game.Role
+import shina.manhunt.game.TeamChestHolder
 import shina.manhunt.kit.Gear
 import java.util.UUID
 import kotlin.math.ceil
@@ -94,9 +102,6 @@ class GameListener(private val plugin: Manhunt) : Listener {
         }
         if (player.uniqueId in session.downed) {
             event.isCancelled = true
-            if (event !is EntityDamageByEntityEvent) {
-                plugin.ticker.drain(player, ceil(event.finalDamage).toInt().coerceAtLeast(1))
-            }
             return
         }
         val lethal = event.finalDamage >= player.health + player.absorptionAmount
@@ -107,7 +112,8 @@ class GameListener(private val plugin: Manhunt) : Listener {
             Match.eliminate(plugin, player)
             return
         }
-        plugin.ticker.down(player, ceil(event.finalDamage).toInt().coerceAtLeast(1))
+        val cost = if (event is EntityDamageByEntityEvent) 20 else ceil(event.finalDamage).toInt().coerceAtLeast(1)
+        plugin.ticker.down(player, cost)
     }
 
     @EventHandler
@@ -163,6 +169,28 @@ class GameListener(private val plugin: Manhunt) : Listener {
     }
 
     @EventHandler
+    fun onBreak(event: BlockBreakEvent) {
+        if (event.block.type == Material.SPAWNER) {
+            event.isCancelled = true
+            return
+        }
+        val type = event.block.type
+        if ((type == Material.DIAMOND_ORE || type == Material.DEEPSLATE_DIAMOND_ORE) &&
+            plugin.session.role(event.player.uniqueId) == Role.HUNTER
+        ) event.isCancelled = true
+    }
+
+    @EventHandler
+    fun onEntityExplode(event: EntityExplodeEvent) {
+        event.blockList().removeIf { it.type == Material.SPAWNER }
+    }
+
+    @EventHandler
+    fun onBlockExplode(event: BlockExplodeEvent) {
+        event.blockList().removeIf { it.type == Material.SPAWNER }
+    }
+
+    @EventHandler
     fun onBreakFurnace(event: BlockDropItemEvent) {
         val state = event.blockState as? org.bukkit.block.TileState ?: return
         if (!Gear.isFastFurnace(state)) return
@@ -195,7 +223,13 @@ class GameListener(private val plugin: Manhunt) : Listener {
         val item = event.item ?: return
         if (Gear.isRally(item)) {
             event.isCancelled = true
-            plugin.ticker.useRally(player)
+            if (!plugin.ticker.useRally(player)) return
+            val hand = event.hand ?: return
+            val stack = player.inventory.getItem(hand)
+            if (Gear.isRally(stack)) {
+                stack.amount -= 1
+                if (stack.amount <= 0) player.inventory.setItem(hand, null)
+            }
             return
         }
         if (Gear.isGift(item)) {
@@ -228,9 +262,15 @@ class GameListener(private val plugin: Manhunt) : Listener {
 
     @EventHandler
     fun onDrop(event: PlayerDropItemEvent) {
-        if (!Gear.isHunterCompass(event.itemDrop.itemStack)) return
+        val stack = event.itemDrop.itemStack
+        if (Gear.isHunterCompass(stack)) {
+            event.isCancelled = true
+            plugin.hunterLoop.cycle(event.player)
+            return
+        }
+        val kind = Gear.compassKind(stack) ?: return
         event.isCancelled = true
-        plugin.hunterLoop.cycle(event.player)
+        plugin.progress.retargetCompass(event.player, kind, skipCurrent = true, announce = true)
     }
 
     @EventHandler
@@ -274,7 +314,10 @@ class GameListener(private val plugin: Manhunt) : Listener {
         val player = event.player
         if (session.phase != Phase.PLAYING || session.role(player.uniqueId) != Role.RUNNER) return
         val previous = session.currentSpot[player.uniqueId]
-        if (previous?.world == event.from) session.exitSpot[player.uniqueId] = previous
+        if (previous?.world == event.from) {
+            session.exitSpot[player.uniqueId] = previous
+            session.dimensionSpot.getOrPut(player.uniqueId) { mutableMapOf() }[event.from.name] = previous.clone()
+        }
         if (player.world.environment == World.Environment.NETHER) {
             session.nether = true
             session.wasInNether.add(player.uniqueId)
@@ -292,6 +335,30 @@ class GameListener(private val plugin: Manhunt) : Listener {
         if (!plugin.session.netherLocked()) return
         event.isCancelled = true
         event.player.warnTitle("地狱封锁", "传送门暂时无法传送")
+    }
+
+    @EventHandler
+    fun onChestClick(event: InventoryClickEvent) {
+        val top = event.view.topInventory
+        if (top.holder !is TeamChestHolder) return
+        val buttonSlot = event.rawSlot == Gear.XP_DEPOSIT_SLOT || event.rawSlot == Gear.XP_WITHDRAW_SLOT
+        if (!buttonSlot && !Gear.isXpButton(event.currentItem) && !Gear.isXpButton(event.cursor)) return
+        event.isCancelled = true
+        val player = event.whoClicked as? Player ?: return
+        val deposit = event.rawSlot == Gear.XP_DEPOSIT_SLOT || Gear.isXpDeposit(event.currentItem)
+        val withdraw = event.rawSlot == Gear.XP_WITHDRAW_SLOT || Gear.isXpWithdraw(event.currentItem)
+        when {
+            deposit && (event.click == ClickType.LEFT || event.click == ClickType.SHIFT_LEFT) -> plugin.hunterLoop.xp(player, "deposit")
+            withdraw && (event.click == ClickType.RIGHT || event.click == ClickType.SHIFT_RIGHT) -> plugin.hunterLoop.xp(player, "withdraw")
+            deposit -> player.sendActionBar(net.kyori.adventure.text.Component.text("左键存入"))
+            withdraw -> player.sendActionBar(net.kyori.adventure.text.Component.text("右键取出"))
+        }
+    }
+
+    @EventHandler
+    fun onChestDrag(event: InventoryDragEvent) {
+        if (event.view.topInventory.holder !is TeamChestHolder) return
+        if (event.rawSlots.any { it == Gear.XP_DEPOSIT_SLOT || it == Gear.XP_WITHDRAW_SLOT }) event.isCancelled = true
     }
 
     @EventHandler
@@ -320,21 +387,29 @@ class GameListener(private val plugin: Manhunt) : Listener {
                 loot.filter { it.type == Material.IRON_INGOT || it.type == Material.DIAMOND }.forEach { it.amount = (it.amount * 2).coerceAtMost(it.maxStackSize) }
                 if (loot.none { it.type == Material.DIAMOND } && Math.random() < 0.2) loot.add(ItemStack(Material.DIAMOND))
             }
-            path == "chests/trial_chambers/reward_ominous" -> (event.entity as? Player)?.let {
+            path.startsWith("chests/trial_chambers/reward_ominous") -> (event.entity as? Player)?.let {
                 plugin.progress.award(it, "trial_ominous")
                 plugin.session.netherUnlocked = true
             }
-            path == "chests/trial_chambers/reward" -> (event.entity as? Player)?.let { plugin.progress.award(it, "trial_vault") }
+            path.startsWith("chests/trial_chambers/reward") -> (event.entity as? Player)?.let { plugin.progress.award(it, "trial_vault") }
         }
     }
 
     @EventHandler
     fun onBarter(event: PiglinBarterEvent) {
-        for (item in event.outcome) {
-            if (item.type == Material.ENDER_PEARL || item.type == Material.OBSIDIAN) {
-                item.amount = (item.amount * 2).coerceAtMost(item.maxStackSize)
-            }
+        val outcome = event.outcome
+        for (item in outcome) {
+            if (item.type == Material.ENDER_PEARL) item.amount = (item.amount * 2).coerceAtMost(16)
+            if (item.type == Material.OBSIDIAN) item.amount = (item.amount + 2).coerceAtMost(item.maxStackSize)
         }
+        if (Math.random() < 0.6) outcome.add(ItemStack(Material.ENDER_PEARL, kotlin.random.Random.nextInt(4, 9)))
+        if (Math.random() < 0.5) outcome.add(ItemStack(Material.OBSIDIAN, kotlin.random.Random.nextInt(1, 4)))
+    }
+
+    @EventHandler
+    fun onTrack(event: PlayerTrackEntityEvent) {
+        val mate = event.entity as? Player ?: return
+        plugin.ticker.glowTeammate(event.player, mate)
     }
 
     private fun blessFire(player: Player, event: EntityDamageEvent) {

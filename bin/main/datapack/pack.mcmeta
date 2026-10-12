@@ -1,0 +1,7 @@
+{
+  "pack": {
+    "description": "Manhunt",
+    "pack_format": 48,
+    "supported_formats": [48, 81]
+  }
+}

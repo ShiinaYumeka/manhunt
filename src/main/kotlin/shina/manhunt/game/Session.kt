@@ -68,7 +68,7 @@ class StructureMark(
 class Session(val plugin: Manhunt) {
     var phase = Phase.LOBBY
     var respawnSeconds = 35
-    var reserveMax = 300
+    var reserveMax = 400
     val roles = mutableMapOf<UUID, Role>()
     val reserve = mutableMapOf<UUID, Int>()
     val eliminated = mutableSetOf<UUID>()
@@ -83,6 +83,7 @@ class Session(val plugin: Manhunt) {
     var mid = false
     var nether = false
     var heavyDream = false
+    var wallEye = false
     var protectionBlessing = false
     var enchantSupplied = false
     var fullIron = false
@@ -94,7 +95,6 @@ class Session(val plugin: Manhunt) {
     var combatCountdownEnd: Long? = null
     val armor15 = mutableSetOf<UUID>()
     val armor18 = mutableSetOf<UUID>()
-    val rewardedVanilla = mutableSetOf<String>()
     val suppress = mutableSetOf<UUID>()
     val huntCooldownUntil = mutableMapOf<UUID, Long>()
     val huntCountdownEnd = mutableMapOf<UUID, Long>()
@@ -103,7 +103,8 @@ class Session(val plugin: Manhunt) {
     val compassTarget = mutableMapOf<UUID, UUID>()
     val currentSpot = mutableMapOf<UUID, Location>()
     val exitSpot = mutableMapOf<UUID, Location>()
-    val goals = mutableMapOf<UUID, CompassGoal>()
+    val dimensionSpot = mutableMapOf<UUID, MutableMap<String, Location>>()
+    val goals = mutableMapOf<UUID, MutableMap<String, CompassGoal>>()
     val visited = mutableMapOf<UUID, MutableList<StructureMark>>()
     val rules = Rule.entries.associateWith { true }.toMutableMap()
     val vitality = mutableSetOf<UUID>()
@@ -111,6 +112,13 @@ class Session(val plugin: Manhunt) {
     var xpBank = 0
     val chestHolder = TeamChestHolder()
     lateinit var chest: Inventory
+
+    fun noteSpot(player: Player) {
+        currentSpot[player.uniqueId] = player.location.clone()
+        dimensionSpot.getOrPut(player.uniqueId) { mutableMapOf() }[player.world.name] = player.location.clone()
+    }
+
+    fun lastIn(id: UUID, worldName: String): Location? = dimensionSpot[id]?.get(worldName)
 
     fun role(id: UUID): Role? = roles[id]
 

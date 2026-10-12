@@ -26,6 +26,7 @@ class Manhunt : JavaPlugin() {
         registerCommand("manhunt", "猎人游戏", ManhuntCommand(this))
         server.pluginManager.registerEvents(GameListener(this), this)
         server.scheduler.runTaskTimer(this, Runnable { ticker.tick() }, 20L, 20L)
+        server.scheduler.runTaskTimer(this, Runnable { ticker.refreshGlow() }, 4L, 4L)
     }
 
     override fun onDisable() {

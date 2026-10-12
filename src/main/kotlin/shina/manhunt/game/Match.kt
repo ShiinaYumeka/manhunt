@@ -13,6 +13,7 @@ import org.bukkit.World
 import org.bukkit.attribute.Attribute
 import org.bukkit.block.Chest
 import org.bukkit.entity.Player
+import org.bukkit.potion.PotionEffect
 import org.bukkit.potion.PotionEffectType
 import shina.manhunt.play.setCrawling
 import shina.manhunt.play.warnTitle
@@ -47,6 +48,7 @@ object Match {
         val hut = buildHut(world)
         session.chest = Bukkit.createInventory(session.chestHolder, 54, Component.text("团队仓库"))
         session.chestHolder.bind(session.chest)
+        Gear.placeXpButtons(session.chest, session.xpBank)
         for (player in Bukkit.getOnlinePlayers()) {
             player.inventory.clear()
             player.absorptionAmount = 0.0
@@ -85,6 +87,7 @@ object Match {
             player.gameMode = GameMode.SURVIVAL
             player.health = 20.0
             absorb(player)
+            player.addPotionEffect(PotionEffect(PotionEffectType.RESISTANCE, 30 * 60 * 20, 0, false, true, true))
             player.inventory.addItem(Gear.runnerCompass())
             player.inventory.addItem(Gear.rallyItem())
             plugin.progress.award(player, "start")
@@ -105,7 +108,13 @@ object Match {
         if (!session.eliminated.add(player.uniqueId)) return
         session.downed.remove(player.uniqueId)
         session.giveUpSince.remove(player.uniqueId)
+        val rescuers = session.rescue.filterValues { it.first == player.uniqueId }.keys.toList()
         session.rescue.entries.removeIf { it.key == player.uniqueId || it.value.first == player.uniqueId }
+        for (id in rescuers) {
+            val rescuer = Bukkit.getPlayer(id) ?: continue
+            if (rescuer.uniqueId !in session.downed) rescuer.walkSpeed = 0.2f
+        }
+        player.removePotionEffect(PotionEffectType.RESISTANCE)
         dropBelongings(player)
         player.walkSpeed = 0.2f
         player.setCrawling(false)
@@ -146,7 +155,10 @@ object Match {
             .append(link("古代城市", "ancient"))
             .append(Component.text(" "))
             .append(link("矿井", "mineshaft"))
-        for (player in Bukkit.getOnlinePlayers()) player.sendMessage(message)
+        for (player in session.livingRunners()) {
+            plugin.progress.reportRouteDistances(player)
+            player.sendMessage(message)
+        }
     }
 
     private fun dropBelongings(player: Player) {

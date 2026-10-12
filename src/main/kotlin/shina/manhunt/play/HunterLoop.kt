@@ -1,7 +1,6 @@
 package shina.manhunt.play
 
 import net.kyori.adventure.text.Component
-import net.kyori.adventure.text.event.ClickEvent
 import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.FluidCollisionMode
 import org.bukkit.GameMode
@@ -9,7 +8,9 @@ import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.World
 import org.bukkit.attribute.Attribute
+import org.bukkit.enchantments.Enchantment
 import org.bukkit.entity.Player
+import org.bukkit.inventory.ItemStack
 import shina.manhunt.Manhunt
 import shina.manhunt.game.Role
 import shina.manhunt.game.TeamChestHolder
@@ -46,17 +47,11 @@ class HunterLoop(private val plugin: Manhunt) {
         }
         session.respawnReadyAt.remove(player.uniqueId)
         player.gameMode = GameMode.SURVIVAL
-        player.getAttribute(Attribute.MAX_HEALTH)?.baseValue = 16.0
-        player.health = 16.0
+        val maxHealth = if (session.armor15.isEmpty()) 16.0 else 20.0
+        player.getAttribute(Attribute.MAX_HEALTH)?.baseValue = maxHealth
+        player.health = maxHealth
         player.foodLevel = 20
-        player.inventory.addItem(Gear.hunterCompass())
-        player.inventory.addItem(Gear.teamChest())
-        val kit = Gear.loadout(session).toMutableList()
-        val blessed = kit.firstOrNull { it.containsEnchantment(org.bukkit.enchantments.Enchantment.BINDING_CURSE) && it.type.equipmentSlot.isArmor }
-        if (blessed != null) kit.remove(blessed)
-        val leftover = player.inventory.addItem(*kit.toTypedArray())
-        leftover.values.forEach { player.world.dropItem(player.location, it) }
-        if (blessed != null) player.inventory.setItem(blessed.type.equipmentSlot, blessed)
+        giveHunterGear(player, Gear.loadout(session).toMutableList())
         val runners = session.livingRunners()
         if (runners.isNotEmpty() && session.compassTarget[player.uniqueId] == null) {
             session.compassTarget[player.uniqueId] = nearest(player, runners)?.uniqueId ?: runners.first().uniqueId
@@ -64,18 +59,74 @@ class HunterLoop(private val plugin: Manhunt) {
         player.sendMessage(Component.text("你已复活。").color(NamedTextColor.GREEN))
     }
 
+    fun ensureHunterTools(player: Player) {
+        val missing = mutableListOf<ItemStack>()
+        if (player.inventory.contents.none { it != null && Gear.isHunterCompass(it) }) missing += Gear.hunterCompass()
+        if (player.inventory.contents.none { it != null && Gear.isTeamChest(it) }) missing += Gear.teamChest()
+        if (missing.isEmpty()) return
+        val storage = player.inventory.storageContents
+        for (item in missing.sortedByDescending { Gear.isHunterCompass(it) }) {
+            val index = (8 downTo 0).firstOrNull { empty(storage[it]) }
+                ?: storage.indices.reversed().firstOrNull { empty(storage[it]) }
+            if (index == null) player.world.dropItem(player.location, item) else storage[index] = item
+        }
+        player.inventory.storageContents = storage
+    }
+
+    private fun giveHunterGear(player: Player, kit: MutableList<ItemStack>) {
+        val armor = kit.filter { it.type.equipmentSlot.isArmor }
+        kit.removeAll(armor.toSet())
+        val displaced = mutableListOf<ItemStack>()
+        for ((slot, pieces) in armor.groupBy { it.type.equipmentSlot }) {
+            val chosen = pieces.firstOrNull { it.containsEnchantment(Enchantment.BINDING_CURSE) } ?: pieces.maxBy { armorTier(it.type) }
+            val current = player.inventory.getItem(slot)
+            if (current != null && current.type != Material.AIR) displaced += current
+            player.inventory.setItem(slot, chosen)
+            displaced += pieces.filter { it !== chosen }
+        }
+        kit += displaced
+        val swords = kit.filter { it.type.name.endsWith("_SWORD") }
+        val axes = kit.filter { it.type.name.endsWith("_AXE") }
+        kit.removeAll(swords.toSet())
+        kit.removeAll(axes.toSet())
+        val storage = player.inventory.storageContents
+        val reserved = mutableSetOf<Int>()
+        for (item in listOf(Gear.hunterCompass(), Gear.teamChest())) {
+            val index = (8 downTo 0).firstOrNull { it !in reserved && empty(storage[it]) }
+                ?: storage.indices.reversed().firstOrNull { it !in reserved && empty(storage[it]) }
+            if (index == null) player.world.dropItem(player.location, item) else {
+                storage[index] = item
+                reserved += index
+            }
+        }
+        var cursor = 0
+        for (item in swords + axes + kit) {
+            while (cursor < storage.size && (cursor in reserved || !empty(storage[cursor]))) cursor++
+            if (cursor >= storage.size) player.world.dropItem(player.location, item) else storage[cursor++] = item
+        }
+        player.inventory.storageContents = storage
+    }
+
+    private fun empty(item: ItemStack?) = item == null || item.type == Material.AIR
+
+    private fun armorTier(type: Material): Int = when {
+        type.name.startsWith("NETHERITE_") -> 5
+        type.name.startsWith("DIAMOND_") -> 4
+        type.name.startsWith("IRON_") -> 3
+        type.name.startsWith("CHAINMAIL_") -> 2
+        type.name.startsWith("GOLDEN_") || type.name.startsWith("COPPER_") -> 1
+        else -> 0
+    }
+
     fun openChest(player: Player) {
         val session = plugin.session
         if (session.phase != shina.manhunt.game.Phase.PLAYING || session.role(player.uniqueId) != Role.HUNTER) return
-        if (session.livingRunners().any { it.world == player.world && it.location.distance(player.location) <= 70 }) {
-            player.warnTitle("无法打开", "必须离逃生超过 70 格")
+        if (session.livingRunners().any { it.world == player.world && it.location.distance(player.location) <= 20 }) {
+            player.warnTitle("无法打开", "必须离逃生超过 20 格")
             return
         }
+        Gear.placeXpButtons(session.chest, session.xpBank)
         player.openInventory(session.chest)
-        player.sendMessage(Component.text("经验池：${session.xpBank}  ")
-            .append(Component.text("[存入]").color(NamedTextColor.AQUA).clickEvent(ClickEvent.runCommand("/manhunt xp deposit")))
-            .append(Component.text(" "))
-            .append(Component.text("[取出]").color(NamedTextColor.GOLD).clickEvent(ClickEvent.runCommand("/manhunt xp withdraw"))))
     }
 
     fun xp(player: Player, action: String?) {
@@ -87,30 +138,48 @@ class HunterLoop(private val plugin: Manhunt) {
         when (action) {
             "deposit" -> {
                 val points = player.expPoints()
-                if (points <= 0) return
+                if (points <= 0) {
+                    player.sendActionBar(Component.text("没有可存入的经验"))
+                    return
+                }
                 player.clearExp()
                 session.xpBank += points
-                player.sendMessage("已存入 $points 点经验，池中共 ${session.xpBank}。")
+                Gear.placeXpButtons(session.chest, session.xpBank)
+                player.sendActionBar(Component.text("已存入 $points 点，池中共 ${session.xpBank}"))
             }
             "withdraw" -> {
                 val points = session.xpBank
-                if (points <= 0) return
+                if (points <= 0) {
+                    player.sendActionBar(Component.text("经验池是空的"))
+                    return
+                }
                 session.xpBank = 0
                 player.giveExp(points)
-                player.sendMessage("已取出 $points 点经验。")
+                Gear.placeXpButtons(session.chest, session.xpBank)
+                player.sendActionBar(Component.text("已取出 $points 点经验"))
             }
             else -> player.sendMessage("/manhunt xp deposit|withdraw")
         }
     }
 
     fun cycle(player: Player) {
-        val runners = plugin.session.livingRunners()
+        val session = plugin.session
+        val runners = session.livingRunners().sortedWith(compareBy({ it.name }, { it.uniqueId }))
         if (runners.isEmpty()) return
-        val current = plugin.session.compassTarget[player.uniqueId]
+        val current = session.compassTarget[player.uniqueId]
+        val others = runners.filter { it.uniqueId != current }
+        if (others.isEmpty()) {
+            player.sendActionBar(Component.text("没有其他逃生"))
+            plugin.ticker.refreshHunterCompass(player)
+            return
+        }
         val index = runners.indexOfFirst { it.uniqueId == current }
-        val next = runners[Math.floorMod(index + 1, runners.size)]
-        plugin.session.compassTarget[player.uniqueId] = next.uniqueId
-        player.sendActionBar(Component.text("追踪 ${next.name}"))
+        val stepped = runners[Math.floorMod(index + 1, runners.size)]
+        val next = if (stepped.uniqueId == current) others.first() else stepped
+        session.compassTarget[player.uniqueId] = next.uniqueId
+        val nearest = plugin.ticker.refreshHunterCompass(player)
+        val mark = if (nearest) " 【最近】" else ""
+        player.sendActionBar(Component.text("追踪 ${next.name}$mark"))
     }
 
     fun teleportStrike() {
@@ -165,7 +234,8 @@ class HunterLoop(private val plugin: Manhunt) {
 
     private fun invalidReason(hunter: Player): String? {
         val runners = plugin.session.livingRunners().filter { it.world == hunter.world }
-        if (runners.none { it.location.distance(hunter.location) in 50.0..300.0 }) return "需要至少一名逃生在 50 到 300 格内"
+        if (!plugin.session.early && hunter.location.y < 40) return "开局五分钟内不能在 Y 40 以下复活"
+        if (runners.none { it.location.distance(hunter.location) in 40.0..300.0 }) return "需要至少一名逃生在 40 到 300 格内"
         if (runners.any { sees(it, hunter) }) return "你还在逃生的视线内"
         return null
     }

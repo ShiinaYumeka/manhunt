@@ -8,6 +8,7 @@ import io.papermc.paper.registry.RegistryAccess
 import io.papermc.paper.registry.RegistryKey
 import org.bukkit.Bukkit
 import org.bukkit.Color
+import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.NamespacedKey
 import org.bukkit.attribute.Attribute
@@ -36,9 +37,16 @@ class Progress(private val plugin: Manhunt) {
         val root = File(plugin.dataFolder, "datapack")
         copyResources(root)
         writeAdvancements(File(root, "data/manhunt/advancement"))
+        val restore = listOf(
+            "data/minecraft/advancement/adventure/minecraft_trials_edition.json",
+            "data/minecraft/advancement/adventure/under_lock_and_key.json",
+            "data/minecraft/advancement/adventure/revaulting.json"
+        )
+        for (path in restore) File(root, path).delete()
         for (world in Bukkit.getWorlds()) {
             val dest = File(world.worldFolder, "datapacks/manhunt")
             root.copyRecursively(dest, overwrite = true)
+            for (path in restore) File(dest, path).delete()
         }
         Bukkit.reloadData()
     }
@@ -65,6 +73,10 @@ class Progress(private val plugin: Manhunt) {
                 return
             }
         }
+        if (session.role(player.uniqueId) != Role.RUNNER || player.uniqueId in session.eliminated) {
+            player.warnTitle("无法选路", "只有逃生可以选择路线")
+            return
+        }
         if (session.route != null) {
             player.warnTitle("无法选路", "路线已经选定")
             return
@@ -86,9 +98,6 @@ class Progress(private val plugin: Manhunt) {
         val key = event.advancement.key
         if (key == NamespacedKey.minecraft("end/kill_dragon")) Match.runnersWin(plugin)
         if (key == NamespacedKey.minecraft("story/enchant_item") && session.role(player.uniqueId) == Role.RUNNER) supplyEnchant()
-        if (countsForReserve(key) && session.rewardedVanilla.add(key.toString())) {
-            for (runner in session.livingRunners()) session.reserve[runner.uniqueId] = (session.reserve[runner.uniqueId] ?: 0) + 30
-        }
         if (key.namespace == "manhunt") {
             reward(player, key.key)
             announce(player, event.advancement)
@@ -125,47 +134,87 @@ class Progress(private val plugin: Manhunt) {
         if (enchant != null && player.getAdvancementProgress(enchant).isDone) award(player, "quiet_ench")
     }
 
-    fun nextStructure(player: Player): CompassGoal? {
-        val visited = plugin.session.visited[player.uniqueId].orEmpty()
-        val kinds = listOf(
-            Structure.VILLAGE_PLAINS to "village",
-            Structure.VILLAGE_DESERT to "village",
-            Structure.VILLAGE_SAVANNA to "village",
-            Structure.VILLAGE_SNOWY to "village",
-            Structure.VILLAGE_TAIGA to "village",
-            Structure.SHIPWRECK to "ship",
-            Structure.SHIPWRECK_BEACHED to "ship",
-            Structure.RUINED_PORTAL to "portal"
-        )
-        for (ring in listOf(0.0, 96.0, 192.0, 384.0, 768.0, 1400.0)) {
-            val origins = if (ring == 0.0) {
-                listOf(player.location)
-            } else {
-                (0 until 8).map { step ->
-                    val angle = step * Math.PI / 4.0
-                    player.location.clone().add(Math.cos(angle) * ring, 0.0, Math.sin(angle) * ring)
-                }
-            }
-            var best: CompassGoal? = null
-            var bestDistance = Double.MAX_VALUE
-            for (origin in origins) {
-                for ((structure, kind) in kinds) {
-                    val found = player.world.locateNearestStructure(origin, structure, 48, false)?.location ?: continue
-                    val dx = found.x - player.location.x
-                    val dz = found.z - player.location.z
-                    if (dx * dx + dz * dz <= 64.0 * 64.0) continue
-                    val goal = CompassGoal(player.world.name, found.blockX, found.blockY, found.blockZ, kind)
-                    if (visited.any { it.covers(player.world.name, kind, found.x, found.z) }) continue
-                    val distance = dx * dx + dz * dz
-                    if (distance < bestDistance) {
-                        bestDistance = distance
-                        best = goal
-                    }
-                }
-            }
-            if (best != null) return best
+    fun reportRouteDistances(player: Player) {
+        player.sendMessage(Component.text("附近距离").color(NamedTextColor.GOLD))
+        player.sendMessage(distanceLine("试炼密室", structureDistance(player, "trial", 128)))
+        player.sendMessage(distanceLine("古城", structureDistance(player, "ancient", 128)))
+        player.sendMessage(distanceLine("废弃矿井", structureDistance(player, "mineshaft", 96)))
+        player.sendMessage(distanceLine("岩浆池", lavaDistance(player)))
+    }
+
+    fun retargetCompass(player: Player, kind: String, skipCurrent: Boolean, announce: Boolean) {
+        val session = plugin.session
+        val map = session.goals.getOrPut(player.uniqueId) { mutableMapOf() }
+        val next = nextStructure(player, kind, if (skipCurrent) map[kind] else null)
+        if (next == null) {
+            if (announce) player.warnTitle("指南针", "附近没有下一座")
+            map[kind]?.let { plugin.ticker.pointStructureCompass(player, kind, it) }
+            return
         }
-        return null
+        map[kind] = next
+        plugin.ticker.pointStructureCompass(player, kind, next)
+        if (announce) hintStructure(player, next)
+    }
+
+    fun nextStructure(player: Player, kind: String, exclude: CompassGoal? = null): CompassGoal? {
+        val structures = structuresFor(kind)
+        if (structures.isEmpty()) return null
+        val visited = plugin.session.visited[player.uniqueId].orEmpty()
+        fun usable(found: Location): Boolean {
+            if (horizontalDistanceSq(player.location, found) <= 64.0 * 64.0) return false
+            if (visited.any { it.covers(player.world.name, kind, found.x, found.z) }) return false
+            if (exclude != null && exclude.world == player.world.name && exclude.kind == kind) {
+                val dx = found.x - exclude.x
+                val dz = found.z - exclude.z
+                if (dx * dx + dz * dz <= 48.0 * 48.0) return false
+            }
+            return true
+        }
+        fun goal(found: Location) = CompassGoal(player.world.name, found.blockX, found.blockY, found.blockZ, kind)
+        val radius = when (kind) {
+            "stronghold" -> 256
+            "ancient" -> 128
+            "village" -> 160
+            else -> 96
+        }
+        val closest = nearestLocation(player.world, player.location, structures, radius)
+        if (closest != null && usable(closest)) return goal(closest)
+        if (closest == null) {
+            nearestLocation(player.world, player.location, structures, radius * 2, ::usable)?.let { return goal(it) }
+        }
+        var best: Location? = null
+        var bestDistance = Double.MAX_VALUE
+        for (ring in intArrayOf(256, 512, 1024, 2048)) {
+            for (step in 0 until 8) {
+                val angle = step * Math.PI / 4.0
+                val probe = player.location.clone().add(Math.cos(angle) * ring, 0.0, Math.sin(angle) * ring)
+                val found = nearestLocation(player.world, probe, structures, 16, ::usable) ?: continue
+                val distance = horizontalDistanceSq(player.location, found)
+                if (distance < bestDistance) {
+                    bestDistance = distance
+                    best = found
+                }
+            }
+            if (best != null) break
+        }
+        val found = best ?: return null
+        return goal(found)
+    }
+
+    fun structuresFor(kind: String): List<Structure> = when (kind) {
+        "village" -> listOf(Structure.VILLAGE_PLAINS, Structure.VILLAGE_DESERT, Structure.VILLAGE_SAVANNA, Structure.VILLAGE_SNOWY, Structure.VILLAGE_TAIGA)
+        "bastion" -> listOf(Structure.BASTION_REMNANT)
+        "fortress" -> listOf(Structure.FORTRESS)
+        "stronghold" -> listOf(Structure.STRONGHOLD)
+        "trial" -> listOf(Structure.TRIAL_CHAMBERS)
+        "ancient" -> listOf(Structure.ANCIENT_CITY)
+        "mineshaft" -> listOf(Structure.MINESHAFT, Structure.MINESHAFT_MESA)
+        else -> emptyList()
+    }
+
+    private fun giveCompass(player: Player, kind: String, title: String) {
+        give(player, Gear.structureCompass(kind, title))
+        retargetCompass(player, kind, skipCurrent = false, announce = false)
     }
 
     private fun reward(player: Player, id: String, shared: Boolean = false) {
@@ -175,36 +224,51 @@ class Progress(private val plugin: Manhunt) {
             "iron_pick" -> give(player, *Gear.copperLegsBoots().toTypedArray())
             "water" -> give(player, *Gear.copperHelmChest().toTypedArray())
             "nether" -> {
-                give(player, Gear.structureCompass(goalNear(player, Structure.BASTION_REMNANT, "bastion"), "堡垒遗迹指南针"))
+                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 60
+                giveCompass(player, "bastion", "堡垒遗迹指南针")
                 permanentAbsorption(player)
             }
             "bastion" -> {
+                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 40
                 give(player, ItemStack(Material.GOLDEN_HELMET), ItemStack(Material.IRON_INGOT, 2))
                 growHealth(player, 2.0)
             }
-            "pearls" -> give(player, Gear.structureCompass(goalNear(player, Structure.FORTRESS, "fortress"), "下界要塞指南针"))
+            "pearls" -> giveCompass(player, "fortress", "下界要塞指南针")
             "obsidian" -> give(player, ItemStack(Material.IRON_BOOTS), splashFireResistance())
-            "fortress" -> session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 20
-            "blaze" -> give(player, ItemStack(Material.DIAMOND, 2), ItemStack(Material.BOOK))
-            "return_overworld" -> give(player, ItemStack(Material.IRON_INGOT, 10), ItemStack(Material.DIAMOND, 4), randomEnchantedBook(20))
+            "fortress" -> session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 60
+            "blaze" -> {
+                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 40
+                give(player, ItemStack(Material.DIAMOND, 2), ItemStack(Material.BOOK))
+            }
+            "return_overworld" -> {
+                give(
+                    player,
+                    ItemStack(Material.IRON_INGOT, 10),
+                    ItemStack(Material.DIAMOND, 4),
+                    enchantingTableBook(20),
+                    Gear.structureCompass("stronghold", "要塞指南针")
+                )
+                retargetCompass(player, "stronghold", skipCurrent = false, announce = false)
+            }
             "stronghold" -> player.giveExp(2000)
             "enter_end" -> {
-                give(player, ItemStack(Material.DIAMOND, 8), ItemStack(Material.ENDER_PEARL, 2))
-                growHealth(player, 2.0)
+                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 100
+                give(player, ItemStack(Material.DIAMOND, 8))
             }
             "full_iron" -> give(player, ItemStack(Material.IRON_INGOT, 7), ItemStack(Material.COBWEB, 4))
             "route_nether" -> give(player, unbreakingPick())
             "route_trial" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 70
-                give(player, Gear.structureCompass(goalNear(player, Structure.TRIAL_CHAMBERS, "trial"), "试炼密室指南针"))
+                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 50
+                giveCompass(player, "trial", "试炼密室指南针")
             }
             "route_ancient" -> {
-                give(player, Gear.structureCompass(goalNear(player, Structure.ANCIENT_CITY, "ancient"), "古城指南针"))
+                giveCompass(player, "ancient", "古城指南针")
                 effect(player, PotionEffectType.SPEED, 2 * 60)
             }
             "route_mineshaft" -> {
                 session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 20
-                give(player, Gear.structureCompass(goalNear(player, Structure.MINESHAFT, "mineshaft"), "废弃矿井指南针"), ItemStack(Material.DIAMOND, 2))
+                give(player, ItemStack(Material.DIAMOND, 2))
+                giveCompass(player, "mineshaft", "废弃矿井指南针")
             }
             "bread" -> give(player, ItemStack(Material.APPLE, 4))
             "feast" -> give(player, ItemStack(Material.GOLD_INGOT, 4), ItemStack(Material.IRON_INGOT, 3))
@@ -217,12 +281,9 @@ class Progress(private val plugin: Manhunt) {
             "gold_miner" -> give(player, ItemStack(Material.BLAST_FURNACE), ItemStack(Material.COAL_BLOCK, 2), ItemStack(Material.GOLDEN_APPLE))
             "crossbow" -> give(player, ItemStack(Material.ARROW, 5), slownessArrows())
             "buckets" -> give(player, ItemStack(Material.LAVA_BUCKET), ItemStack(Material.COBWEB, 8))
-            "efficiency" -> give(player, stored(org.bukkit.enchantments.Enchantment.EFFICIENCY), stored(org.bukkit.enchantments.Enchantment.FORTUNE))
+            "efficiency" -> give(player, stored(org.bukkit.enchantments.Enchantment.EFFICIENCY))
             "trial_enter" -> give(player, ItemStack(Material.COOKED_BEEF, 10), ItemStack(Material.WIND_CHARGE, 4))
-            "trial_vault" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 20
-                give(player, ItemStack(Material.OMINOUS_BOTTLE))
-            }
+            "trial_vault" -> session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 50
             "trial_ominous" -> {
                 session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 20
                 give(player, ItemStack(Material.GOLDEN_APPLE, 3))
@@ -233,7 +294,7 @@ class Progress(private val plugin: Manhunt) {
                 effect(player, PotionEffectType.NIGHT_VISION, 4 * 60)
             }
             "gapple" -> {
-                player.giveExp(2000)
+                player.giveExp(1000)
                 give(player, efficiencyHoe())
             }
             "leggings" -> give(player, ItemStack(Material.ENCHANTING_TABLE))
@@ -246,7 +307,10 @@ class Progress(private val plugin: Manhunt) {
         }
         if (shared) return
         when (id) {
-            "stronghold" -> session.hunters().forEach { it.giveExp(2000) }
+            "stronghold" -> {
+                session.wallEye = true
+                session.hunters().forEach { it.giveExp(2000) }
+            }
             "heavy_core" -> {
                 session.heavyDream = true
                 session.hunters().forEach { give(it, ItemStack(Material.TOTEM_OF_UNDYING)) }
@@ -278,11 +342,6 @@ class Progress(private val plugin: Manhunt) {
             .append(display.description().color(NamedTextColor.GRAY))
         val title = display.title().color(NamedTextColor.GREEN).hoverEvent(HoverEvent.showText(hover))
         Bukkit.broadcast(player.displayName().append(Component.text(" 取得了进度 ")).append(title))
-    }
-
-    private fun countsForReserve(key: NamespacedKey): Boolean {
-        if (key.namespace != "minecraft") return false
-        return key.key.substringBefore('/') in setOf("story", "nether", "end", "adventure", "husbandry")
     }
 
     private fun allowed(id: String): Boolean {
@@ -342,15 +401,141 @@ class Progress(private val plugin: Manhunt) {
 
     private fun structureKind(structure: Structure): String? = when (structure) {
         Structure.VILLAGE_PLAINS, Structure.VILLAGE_DESERT, Structure.VILLAGE_SAVANNA, Structure.VILLAGE_SNOWY, Structure.VILLAGE_TAIGA -> "village"
+        Structure.BASTION_REMNANT -> "bastion"
+        Structure.FORTRESS -> "fortress"
+        Structure.STRONGHOLD -> "stronghold"
+        Structure.TRIAL_CHAMBERS -> "trial"
+        Structure.ANCIENT_CITY -> "ancient"
+        Structure.MINESHAFT, Structure.MINESHAFT_MESA -> "mineshaft"
         Structure.SHIPWRECK, Structure.SHIPWRECK_BEACHED -> "ship"
         Structure.RUINED_PORTAL, Structure.RUINED_PORTAL_DESERT, Structure.RUINED_PORTAL_JUNGLE, Structure.RUINED_PORTAL_MOUNTAIN,
         Structure.RUINED_PORTAL_NETHER, Structure.RUINED_PORTAL_OCEAN, Structure.RUINED_PORTAL_SWAMP -> "portal"
         else -> null
     }
 
-    private fun goalNear(player: Player, structure: Structure, kind: String): CompassGoal {
-        val found = player.world.locateNearestStructure(player.location, structure, 64, false)?.location
-        return CompassGoal(player.world.name, found?.blockX ?: player.location.blockX, found?.blockY ?: player.location.blockY, found?.blockZ ?: player.location.blockZ, kind)
+    private fun hintStructure(player: Player, goal: CompassGoal) {
+        val world = Bukkit.getWorld(goal.world) ?: return
+        val distance = player.location.distance(Location(world, goal.x.toDouble(), player.location.y, goal.z.toDouble())).toInt()
+        val name = structureTitle(goal.kind)
+        player.sendMessage(Component.text("指南针指向下一座$name，约 $distance 格。").color(NamedTextColor.AQUA))
+    }
+
+    private fun structureTitle(kind: String) = when (kind) {
+        "village" -> "村庄"
+        "bastion" -> "堡垒遗迹"
+        "fortress" -> "下界要塞"
+        "stronghold" -> "末地要塞"
+        "trial" -> "试炼密室"
+        "ancient" -> "古城"
+        "mineshaft" -> "废弃矿井"
+        else -> "结构"
+    }
+
+    private fun nearestLocation(
+        world: org.bukkit.World,
+        origin: Location,
+        structures: List<Structure>,
+        radius: Int,
+        accept: (Location) -> Boolean = { true }
+    ): Location? {
+        var best: Location? = null
+        var bestDistance = Double.MAX_VALUE
+        for (structure in structures) {
+            val found = world.locateNearestStructure(origin, structure, radius, false)?.location ?: continue
+            if (!accept(found)) continue
+            val distance = horizontalDistanceSq(origin, found)
+            if (distance < bestDistance) {
+                bestDistance = distance
+                best = found
+            }
+        }
+        return best
+    }
+
+    private fun structureDistance(player: Player, kind: String, radius: Int): Int? {
+        val structures = structuresFor(kind)
+        val found = nearestLocation(player.world, player.location, structures, radius)
+            ?: nearestLocation(player.world, player.location, structures, radius * 2)
+            ?: return null
+        return kotlin.math.sqrt(horizontalDistanceSq(player.location, found)).toInt()
+    }
+
+    private fun lavaDistance(player: Player): Int? {
+        val found = nearestLavaPool(player.location, 192) ?: return null
+        return kotlin.math.sqrt(horizontalDistanceSq(player.location, found)).toInt()
+    }
+
+    private fun nearestLavaPool(origin: Location, radius: Int): Location? {
+        val world = origin.world ?: return null
+        val centerX = origin.blockX shr 4
+        val centerZ = origin.blockZ shr 4
+        val chunkRadius = (radius + 15) / 16
+        var best: Location? = null
+        var bestDistance = Double.MAX_VALUE
+        var scanned = 0
+        for (ring in 0..chunkRadius) {
+            val inner = ((ring - 1) * 16).coerceAtLeast(0)
+            if (best != null && bestDistance <= inner.toDouble() * inner) break
+            for (dx in -ring..ring) for (dz in -ring..ring) {
+                if (ring != 0 && kotlin.math.abs(dx) != ring && kotlin.math.abs(dz) != ring) continue
+                if (scanned >= 120) return best
+                val chunkX = centerX + dx
+                val chunkZ = centerZ + dz
+                if (!world.isChunkGenerated(chunkX, chunkZ)) continue
+                scanned++
+                val found = lavaInChunk(world.getChunkAt(chunkX, chunkZ)) ?: continue
+                val distance = horizontalDistanceSq(origin, found)
+                if (distance < bestDistance) {
+                    bestDistance = distance
+                    best = found
+                }
+            }
+        }
+        return best
+    }
+
+    private fun lavaInChunk(chunk: org.bukkit.Chunk): Location? {
+        val snapshot = chunk.getChunkSnapshot(false, false, false)
+        val minY = chunk.world.minHeight
+        val maxY = 80
+        var x = 0
+        while (x < 16) {
+            var z = 0
+            while (z < 16) {
+                var y = minY
+                while (y < maxY) {
+                    if (snapshot.getBlockType(x, y, z) == Material.LAVA && lavaPool(snapshot, x, y, z)) {
+                        return Location(chunk.world, (chunk.x shl 4) + x.toDouble(), y.toDouble(), (chunk.z shl 4) + z.toDouble())
+                    }
+                    y++
+                }
+                z += 4
+            }
+            x += 4
+        }
+        return null
+    }
+
+    private fun lavaPool(snapshot: org.bukkit.ChunkSnapshot, x: Int, y: Int, z: Int): Boolean {
+        var sources = 0
+        for (ox in -2..2) for (oz in -2..2) {
+            val nx = x + ox
+            val nz = z + oz
+            if (nx !in 0..15 || nz !in 0..15) continue
+            val data = snapshot.getBlockData(nx, y, nz)
+            if (data.material == Material.LAVA && data is org.bukkit.block.data.Levelled && data.level == 0) sources++
+            if (sources >= 4) return true
+        }
+        return false
+    }
+
+    private fun distanceLine(name: String, blocks: Int?): Component =
+        Component.text(if (blocks == null) "$name：附近没有" else "$name：约 $blocks 格").color(NamedTextColor.AQUA)
+
+    private fun horizontalDistanceSq(from: Location, to: Location): Double {
+        val dx = from.x - to.x
+        val dz = from.z - to.z
+        return dx * dx + dz * dz
     }
 
     private fun give(player: Player, vararg items: ItemStack) {
@@ -366,10 +551,36 @@ class Progress(private val plugin: Manhunt) {
         return item
     }
 
-    private fun randomEnchantedBook(level: Int): ItemStack {
-        val choices = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT)
-            .filter { !it.isCursed && it.key != NamespacedKey.minecraft("lunge") }
-        return stored(choices.random(), level)
+    private fun enchantingTableBook(power: Int): ItemStack {
+        val registry = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT)
+        val pool = registry.filter {
+            !it.isCursed && !it.isTreasure && it.key != NamespacedKey.minecraft("lunge") && it.maxLevel > 0
+        }
+        var level = power + 1 + kotlin.random.Random.nextInt(2) + kotlin.random.Random.nextInt(2)
+        level = (level * (1.0 + (Math.random() + Math.random() - 1.0) * 0.15)).toInt().coerceAtLeast(1)
+        val chosen = mutableListOf<Pair<org.bukkit.enchantments.Enchantment, Int>>()
+        var available = selectable(pool, level).toMutableList()
+        while (available.isNotEmpty()) {
+            val pick = available.random()
+            chosen += pick
+            if (kotlin.random.Random.nextInt(50) > level) break
+            level /= 2
+            if (level <= 0) break
+            available = selectable(pool, level).filter { (ench, _) -> chosen.none { it.first == ench || it.first.conflictsWith(ench) } }.toMutableList()
+        }
+        if (chosen.isEmpty()) return stored(org.bukkit.enchantments.Enchantment.UNBREAKING, 1)
+        val item = ItemStack(Material.ENCHANTED_BOOK)
+        val meta = item.itemMeta as org.bukkit.inventory.meta.EnchantmentStorageMeta
+        for ((enchantment, enchantLevel) in chosen) meta.addStoredEnchant(enchantment, enchantLevel, true)
+        item.itemMeta = meta
+        return item
+    }
+
+    private fun selectable(pool: List<org.bukkit.enchantments.Enchantment>, level: Int) = pool.mapNotNull { enchantment ->
+        val enchantLevel = (enchantment.maxLevel downTo 1).firstOrNull { step ->
+            enchantment.getMinModifiedCost(step) <= level && level <= enchantment.getMaxModifiedCost(step)
+        } ?: return@mapNotNull null
+        enchantment to enchantLevel
     }
 
     private fun splashFireResistance(): ItemStack {
@@ -424,6 +635,7 @@ class Progress(private val plugin: Manhunt) {
             "pack.mcmeta",
             "data/manhunt/enchantment/cooking.json",
             "data/minecraft/tags/enchantment/non_treasure.json",
+            "data/minecraft/enchantment/fortune.json",
             "data/minecraft/worldgen/structure_set/villages.json",
             "data/minecraft/worldgen/structure_set/shipwrecks.json",
             "data/minecraft/worldgen/structure_set/ruined_portals.json",
@@ -435,10 +647,7 @@ class Progress(private val plugin: Manhunt) {
             "data/minecraft/advancement/story/form_obsidian.json",
             "data/minecraft/advancement/nether/find_bastion.json",
             "data/minecraft/advancement/nether/find_fortress.json",
-            "data/minecraft/advancement/nether/obtain_blaze_rod.json",
-            "data/minecraft/advancement/adventure/minecraft_trials_edition.json",
-            "data/minecraft/advancement/adventure/under_lock_and_key.json",
-            "data/minecraft/advancement/adventure/revaulting.json"
+            "data/minecraft/advancement/nether/obtain_blaze_rod.json"
         )
         for (path in files) {
             val input = plugin.getResource("datapack/$path") ?: continue
@@ -451,22 +660,22 @@ class Progress(private val plugin: Manhunt) {
     private fun writeAdvancements(dir: File) {
         dir.mkdirs()
         val nodes = listOf(
-            node("start", "minecraft:story/root", "游戏开始", "游戏开始\n奖励：结构指南针", "minecraft:compass"),
+            node("start", "minecraft:story/root", "游戏开始", "游戏开始\n奖励：指向最近村庄的指南针", "minecraft:compass"),
             node("vitality", "manhunt:start", "生机", "抵达初始结构\n奖励：铁锭×3", "minecraft:iron_ingot"),
             node("iron_pick", "manhunt:vitality", "这不是铁镐么？", "获得铁镐\n奖励：铜护腿、铜靴子", "minecraft:iron_pickaxe"),
             node("water", "manhunt:iron_pick", "生命之源", "获得水桶\n奖励：铜头盔、铜胸甲", "minecraft:water_bucket"),
-            node("nether", "manhunt:water", "勇往直下", "进入地狱\n奖励：堡垒遗迹指南针、永久伤害吸收 V", "minecraft:netherrack"),
-            node("bastion", "manhunt:nether", "光辉岁月", "进入堡垒遗迹\n奖励：金头盔×1、铁锭×2、最大生命值+2", "minecraft:golden_helmet"),
+            node("nether", "manhunt:water", "勇往直下", "进入地狱\n奖励：堡垒遗迹指南针、永久伤害吸收 V、备用血×60", "minecraft:netherrack"),
+            node("bastion", "manhunt:nether", "光辉岁月", "进入堡垒遗迹\n奖励：金头盔×1、铁锭×2、最大生命值+2、备用血×40", "minecraft:golden_helmet"),
             node("pearls", "manhunt:bastion", "阳光养猪场 I", "获得 12 个末影珍珠\n奖励：下界要塞指南针", "minecraft:ender_pearl"),
             node("obsidian", "manhunt:pearls", "阳光养猪场 II", "获得 20 个黑曜石\n奖励：铁靴子、8 分钟喷溅抗火药水", "minecraft:obsidian"),
-            node("fortress", "manhunt:obsidian", "阴森的要塞", "进入下界要塞\n奖励：备用血×20", "minecraft:blaze_rod"),
-            node("blaze", "manhunt:fortress", "烈焰升腾", "获得 6 个烈焰棒\n奖励：钻石×2、书×1", "minecraft:blaze_powder"),
-            node("return_overworld", "manhunt:blaze", "我从地狱里回来了", "携带 12 个末影之眼返回主世界\n奖励：铁锭×10、钻石×4、20 级随机附魔书", "minecraft:ender_eye"),
+            node("fortress", "manhunt:obsidian", "阴森的要塞", "进入下界要塞\n奖励：备用血×60", "minecraft:blaze_rod"),
+            node("blaze", "manhunt:fortress", "烈焰升腾", "获得 6 个烈焰棒\n奖励：钻石×2、书×1、备用血×40", "minecraft:blaze_powder"),
+            node("return_overworld", "manhunt:blaze", "我从地狱里回来了", "携带 12 个末影之眼返回主世界\n奖励：铁锭×10、钻石×4、要塞指南针、20 级附魔台结果的附魔书", "minecraft:ender_eye"),
             node("stronghold", "manhunt:return_overworld", "隔墙有眼", "进入末地要塞\n奖励：2000 经验，猎人也获得", "minecraft:ender_eye"),
-            node("enter_end", "manhunt:stronghold", "末路决战", "进入末地\n奖励：每人钻石×8、末影珍珠×2、最大生命值+2", "minecraft:end_stone"),
+            node("enter_end", "manhunt:stronghold", "末路决战", "进入末地\n奖励：每人钻石×8、备用血×100", "minecraft:end_stone"),
             node("full_iron", "manhunt:start", "整装待发", "获得全套铁盔甲\n奖励：铁锭×7、蜘蛛网×4", "minecraft:iron_chestplate"),
             node("route_nether", "manhunt:full_iron", "前往地狱", "继续主线速通\n奖励：每人耐久 I 金镐×1", "minecraft:golden_pickaxe"),
-            node("route_trial", "manhunt:full_iron", "前往试炼密室", "前往试炼\n奖励：每人试炼密室指南针、备用血×70", "minecraft:trial_key"),
+            node("route_trial", "manhunt:full_iron", "前往试炼密室", "前往试炼\n奖励：每人试炼密室指南针、备用血×50", "minecraft:trial_key"),
             node("route_ancient", "manhunt:full_iron", "前往古代城市", "追求宝藏和高级附魔\n奖励：每人古城指南针、速度 I（2 分钟）", "minecraft:sculk"),
             node("route_mineshaft", "manhunt:full_iron", "前往矿井", "争取获得大量钻石\n奖励：每人废弃矿井指南针、钻石×2、备用血×20", "minecraft:rail"),
             node("bread", "manhunt:start", "饱腹感", "拥有 32 个面包\n奖励：苹果×4", "minecraft:bread"),
@@ -477,13 +686,13 @@ class Progress(private val plugin: Manhunt) {
             node("gold_miner", "manhunt:start", "黄金矿工", "获得 30 个粗金\n奖励：高炉×1、煤炭块×2、金苹果×1", "minecraft:raw_gold"),
             node("crossbow", "manhunt:start", "枪枪爆头好运连连", "获得一把弩\n奖励：箭×5、长效缓慢箭×2", "minecraft:crossbow"),
             node("buckets", "manhunt:start", "水泵运转中", "获得 5 个空桶\n奖励：岩浆桶×1、蜘蛛网×8", "minecraft:bucket"),
-            node("efficiency", "manhunt:start", "高效", "获得钻石镐\n奖励：效率 I 附魔书、时运 I 附魔书", "minecraft:diamond_pickaxe"),
+            node("efficiency", "manhunt:start", "高效", "获得钻石镐\n奖励：效率 I 附魔书", "minecraft:diamond_pickaxe"),
             node("trial_enter", "manhunt:route_trial", "Minecraft 试炼版", "进入试炼密室\n奖励：牛排×10、风弹×4", "minecraft:trial_spawner"),
-            node("trial_vault", "manhunt:trial_enter", "珍藏密敛", "开启普通宝库\n奖励：备用血×20、不祥之瓶×1", "minecraft:vault"),
+            node("trial_vault", "manhunt:trial_enter", "珍藏密敛", "开启普通宝库\n奖励：备用血×50", "minecraft:vault"),
             node("trial_ominous", "manhunt:trial_vault", "饱经磨砺", "开启不祥宝库\n奖励：备用血×20、金苹果×3，解除地狱封锁", "minecraft:ominous_bottle"),
             node("heavy_core", "manhunt:trial_ominous", "沉重之梦", "获得沉重核心\n奖励：旋风棒×10，猎人图腾×1", "minecraft:heavy_core"),
             node("ancient_enter", "manhunt:route_ancient", "静谧之地", "进入古城\n奖励：所有人迅捷潜行 II 铜护腿、夜视（4 分钟）", "minecraft:sculk_sensor"),
-            node("gapple", "manhunt:ancient_enter", "君临天下", "获得附魔金苹果\n奖励：2000 经验、效率 IV 钻石锄", "minecraft:enchanted_golden_apple"),
+            node("gapple", "manhunt:ancient_enter", "君临天下", "获得附魔金苹果\n奖励：1000 经验、效率 IV 钻石锄", "minecraft:enchanted_golden_apple"),
             node("leggings", "manhunt:gapple", "AAA 裤头批发", "获得三件钻石护腿\n奖励：附魔台", "minecraft:diamond_leggings"),
             node("quiet_ench", "manhunt:leggings", "静谧魔咒", "成为附魔师\n奖励：青金石×20、2000 经验，猎人也获得经验", "minecraft:enchanting_table"),
             node("mineshaft_enter", "manhunt:route_mineshaft", "废弃之地", "进入废弃矿井\n奖励：剪刀、时运 I 附魔书、铁砧", "minecraft:rail"),

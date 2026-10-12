@@ -36,25 +36,56 @@ object Gear {
     private val kitKey get() = NamespacedKey(Manhunt.instance, "kit")
     private val hunterCompass get() = NamespacedKey(Manhunt.instance, "hunter_compass")
     private val runnerCompass get() = NamespacedKey(Manhunt.instance, "runner_compass")
+    private val compassKindKey get() = NamespacedKey(Manhunt.instance, "compass_kind")
     private val chestKey get() = NamespacedKey(Manhunt.instance, "team_chest")
     private val giftKey get() = NamespacedKey(Manhunt.instance, "gift")
     private val rallyKey get() = NamespacedKey(Manhunt.instance, "rally")
     private val furnaceKey get() = NamespacedKey(Manhunt.instance, "fast_furnace")
+    private val xpDepositKey get() = NamespacedKey(Manhunt.instance, "xp_deposit")
+    private val xpWithdrawKey get() = NamespacedKey(Manhunt.instance, "xp_withdraw")
+    const val XP_DEPOSIT_SLOT = 52
+    const val XP_WITHDRAW_SLOT = 53
 
     fun isKit(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(kitKey, PersistentDataType.BYTE) == true
     fun isHunterCompass(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(hunterCompass, PersistentDataType.BYTE) == true
     fun isRunnerCompass(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(runnerCompass, PersistentDataType.BYTE) == true
+    fun compassKind(item: ItemStack?): String? = item?.itemMeta?.persistentDataContainer?.get(compassKindKey, PersistentDataType.STRING)
     fun isTeamChest(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(chestKey, PersistentDataType.BYTE) == true
     fun isGift(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(giftKey, PersistentDataType.STRING) == true
     fun isRally(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(rallyKey, PersistentDataType.BYTE) == true
     fun isFastFurnace(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(furnaceKey, PersistentDataType.BYTE) == true
+    fun isXpDeposit(item: ItemStack?): Boolean = item?.itemMeta?.persistentDataContainer?.has(xpDepositKey, PersistentDataType.BYTE) == true
+    fun isXpWithdraw(item: ItemStack?): Boolean = item?.itemMeta?.persistentDataContainer?.has(xpWithdrawKey, PersistentDataType.BYTE) == true
+    fun isXpButton(item: ItemStack?): Boolean = isXpDeposit(item) || isXpWithdraw(item)
+
+    fun placeXpButtons(inventory: org.bukkit.inventory.Inventory, bank: Int) {
+        inventory.setItem(XP_DEPOSIT_SLOT, xpButton(Material.EXPERIENCE_BOTTLE, "存入经验", NamedTextColor.AQUA, "左键存入身上的全部经验", bank, xpDepositKey))
+        inventory.setItem(XP_WITHDRAW_SLOT, xpButton(Material.GLASS_BOTTLE, "取出经验", NamedTextColor.GOLD, "右键取出经验池里的全部经验", bank, xpWithdrawKey))
+    }
+
+    private fun xpButton(material: Material, title: String, color: NamedTextColor, action: String, bank: Int, key: NamespacedKey): ItemStack {
+        val item = named(material, title, color)
+        val meta = item.itemMeta
+        meta.lore(listOf(text(action, NamedTextColor.GRAY), text("经验池：$bank", NamedTextColor.WHITE)))
+        item.itemMeta = meta
+        mark(item, key)
+        return item
+    }
 
     fun hunterCompass(): ItemStack = named(Material.COMPASS, "猎人指南针", NamedTextColor.RED).also { mark(it, hunterCompass) }
-    fun runnerCompass(): ItemStack = named(Material.COMPASS, "结构指南针", NamedTextColor.AQUA).also { mark(it, runnerCompass) }
+
+    fun labelHunterCompass(item: ItemStack, targetName: String, nearest: Boolean) {
+        if (!isHunterCompass(item)) return
+        val meta = item.itemMeta ?: return
+        val title = if (nearest) "追踪 $targetName 【最近】" else "追踪 $targetName"
+        meta.customName(text(title, if (nearest) NamedTextColor.GOLD else NamedTextColor.RED))
+        item.itemMeta = meta
+    }
+    fun runnerCompass(): ItemStack = structureCompass("village", "结构指南针")
     fun teamChest(): ItemStack = named(Material.CHEST, "团队仓库", NamedTextColor.GOLD).also { mark(it, chestKey) }
     fun rallyItem(): ItemStack = named(Material.RECOVERY_COMPASS, "集结", NamedTextColor.AQUA).also {
         val meta = it.itemMeta
-        meta.lore(listOf(text("右键发起集结", NamedTextColor.GRAY), text("其他人原地等待 5 秒后传送", NamedTextColor.GRAY)))
+        meta.lore(listOf(text("右键使用一次后消失", NamedTextColor.GRAY), text("原地等待 5 秒后传送到发起者身边", NamedTextColor.GRAY)))
         it.itemMeta = meta
         mark(it, rallyKey)
     }
@@ -81,7 +112,7 @@ object Gear {
     fun loadout(session: Session): List<ItemStack> {
         if (!session.early) return emptyList()
         val level = when {
-            session.heavyDream || session.armor18.isNotEmpty() -> 4
+            session.heavyDream || session.wallEye || session.armor18.isNotEmpty() -> 4
             session.nether -> 3
             session.mid -> 2
             true -> 1
@@ -144,7 +175,7 @@ object Gear {
                 diamondOrder().take(diamonds).forEach { items += fixed(it, 1) }
             }
         }
-        if (session.heavyDream) {
+        if (session.heavyDream || session.wallEye) {
             val have = items.count { it.type in diamondArmor }
             repeat((2 - have).coerceAtLeast(0)) { index ->
                 items += fixed(diamondOrder()[index.coerceAtMost(diamondOrder().lastIndex)], 1)
@@ -235,14 +266,11 @@ object Gear {
         return item
     }
 
-    fun structureCompass(goal: shina.manhunt.game.CompassGoal, title: String): ItemStack {
-        val item = named(Material.COMPASS, title, NamedTextColor.GREEN)
-        val meta = item.itemMeta as org.bukkit.inventory.meta.CompassMeta
-        val world = org.bukkit.Bukkit.getWorld(goal.world)
-        if (world != null) {
-            meta.lodestone = org.bukkit.Location(world, goal.x.toDouble(), goal.y.toDouble(), goal.z.toDouble())
-            meta.isLodestoneTracked = false
-        }
+    fun structureCompass(kind: String, title: String): ItemStack {
+        val item = named(Material.COMPASS, title, if (kind == "village") NamedTextColor.AQUA else NamedTextColor.GREEN)
+        val meta = item.itemMeta
+        meta.persistentDataContainer.set(compassKindKey, PersistentDataType.STRING, kind)
+        if (kind == "village") meta.persistentDataContainer.set(runnerCompass, PersistentDataType.BYTE, 1)
         item.itemMeta = meta
         return item
     }

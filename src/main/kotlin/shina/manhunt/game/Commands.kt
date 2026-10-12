@@ -120,6 +120,7 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
         if (args.size == 2 && args[0] == "event") return Rule.entries.map { it.id }.filter { it.startsWith(args[1]) }
         if (args.size == 3 && args[0] == "event") return listOf("on", "off").filter { it.startsWith(args[2]) }
         if (args.size == 2 && args[0] == "join") return listOf("hunter", "runner").filter { it.startsWith(args[1]) }
+        if (args.size == 2 && args[0] == "reserve") return listOf("400").filter { it.startsWith(args[1]) }
         if (args.size == 2 && args[0] == "route") return listOf("nether", "trial", "ancient", "mineshaft").filter { it.startsWith(args[1]) }
         if (args.size == 2 && args[0] == "xp") return listOf("deposit", "withdraw").filter { it.startsWith(args[1]) }
         return emptyList()
