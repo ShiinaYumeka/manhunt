@@ -47,11 +47,14 @@ class HunterLoop(private val plugin: Manhunt) {
         }
         session.respawnReadyAt.remove(player.uniqueId)
         player.gameMode = GameMode.SURVIVAL
-        val maxHealth = if (session.armor15.isEmpty()) 16.0 else 20.0
-        player.getAttribute(Attribute.MAX_HEALTH)?.baseValue = maxHealth
-        player.health = maxHealth
-        player.foodLevel = 20
-        giveHunterGear(player, Gear.loadout(session).toMutableList())
+        val keepPack = session.huntReturn.remove(player.uniqueId)
+        if (!keepPack) {
+            val maxHealth = if (session.armor15.isEmpty()) 16.0 else 20.0
+            player.getAttribute(Attribute.MAX_HEALTH)?.baseValue = maxHealth
+            player.health = maxHealth
+            player.foodLevel = 20
+            giveHunterGear(player, Gear.loadout(session).toMutableList())
+        }
         val runners = session.livingRunners()
         if (runners.isNotEmpty() && session.compassTarget[player.uniqueId] == null) {
             session.compassTarget[player.uniqueId] = nearest(player, runners)?.uniqueId ?: runners.first().uniqueId

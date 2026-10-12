@@ -98,7 +98,7 @@ class Session(val plugin: Manhunt) {
     val suppress = mutableSetOf<UUID>()
     val huntCooldownUntil = mutableMapOf<UUID, Long>()
     val huntCountdownEnd = mutableMapOf<UUID, Long>()
-    val curseKill = mutableSetOf<UUID>()
+    val huntReturn = mutableSetOf<UUID>()
     val respawnReadyAt = mutableMapOf<UUID, Long>()
     val compassTarget = mutableMapOf<UUID, UUID>()
     val currentSpot = mutableMapOf<UUID, Location>()

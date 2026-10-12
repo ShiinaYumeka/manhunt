@@ -314,13 +314,16 @@ class Ticker(private val plugin: Manhunt) {
                 if (now >= cooldown) {
                     val nearest = session.livingRunners().filter { it.world == hunter.world }.minOfOrNull { it.location.distance(hunter.location) }
                     if (nearest == null || nearest > 300) {
-                        val end = session.huntCountdownEnd.getOrPut(hunter.uniqueId) { now + 15_000 }
-                        val left = ((end - now) / 1000).coerceAtLeast(0)
-                        hunter.warnTitle("狩猎诅咒", "$left 秒后死亡", Duration.ofMillis(1200))
+                        val end = session.huntCountdownEnd.getOrPut(hunter.uniqueId) { now + 10_000 }
                         if (now >= end) {
                             session.huntCountdownEnd.remove(hunter.uniqueId)
-                            session.curseKill.add(hunter.uniqueId)
-                            hunter.health = 0.0
+                            session.huntCooldownUntil[hunter.uniqueId] = now + 60_000
+                            session.huntReturn.add(hunter.uniqueId)
+                            hunter.clearTitle()
+                            plugin.hunterLoop.beginRespawn(hunter, opening = !session.early)
+                        } else {
+                            val left = ((end - now + 999) / 1000).coerceAtLeast(1)
+                            hunter.warnTitle("狩猎诅咒", "$left 秒后进入待复活", Duration.ofMillis(1200))
                         }
                     } else if (session.huntCountdownEnd.remove(hunter.uniqueId) != null) {
                         hunter.clearTitle()

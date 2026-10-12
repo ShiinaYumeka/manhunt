@@ -285,11 +285,6 @@ class GameListener(private val plugin: Manhunt) : Listener {
                 if (killer != null && session.role(killer.uniqueId) == Role.RUNNER) {
                     killer.addPotionEffect(PotionEffect(PotionEffectType.REGENERATION, 60, 1, false, true, true))
                 }
-                if (player.uniqueId in session.curseKill) {
-                    session.curseKill.remove(player.uniqueId)
-                    session.huntCooldownUntil[player.uniqueId] = System.currentTimeMillis() + 60_000
-                    session.huntCountdownEnd.remove(player.uniqueId)
-                }
             }
             Role.RUNNER -> {
                 event.drops.clear()
