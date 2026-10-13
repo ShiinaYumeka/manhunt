@@ -71,6 +71,7 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
         }
         session.roles[player.uniqueId] = role
         plugin.ticker.syncBoard()
+        plugin.ticker.refreshGlowSoon()
         player.sendMessage(Component.text(if (role == Role.HUNTER) "你加入了猎人。" else "你加入了逃生。").color(NamedTextColor.GREEN))
     }
 
@@ -82,6 +83,7 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
         }
         session.roles.remove(player.uniqueId)
         plugin.ticker.syncBoard()
+        plugin.ticker.refreshGlowSoon()
         player.sendMessage("你退出了阵营。")
     }
 

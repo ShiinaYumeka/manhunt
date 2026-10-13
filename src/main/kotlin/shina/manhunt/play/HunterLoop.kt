@@ -60,6 +60,7 @@ class HunterLoop(private val plugin: Manhunt) {
             session.compassTarget[player.uniqueId] = nearest(player, runners)?.uniqueId ?: runners.first().uniqueId
         }
         player.sendMessage(Component.text("你已复活。").color(NamedTextColor.GREEN))
+        plugin.ticker.refreshGlowSoon()
     }
 
     fun ensureHunterTools(player: Player) {

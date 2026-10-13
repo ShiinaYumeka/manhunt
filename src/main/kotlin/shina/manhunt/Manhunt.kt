@@ -22,6 +22,7 @@ class Manhunt : JavaPlugin() {
         hunterLoop = HunterLoop(this)
         ticker = Ticker(this)
         progress.install()
+        server.scheduler.runTask(this, Runnable { shina.manhunt.game.Match.preloadHut(this) })
         server.worlds.forEach { it.setGameRule(GameRules.LOCATOR_BAR, false) }
         registerCommand("manhunt", "猎人游戏", ManhuntCommand(this))
         server.pluginManager.registerEvents(GameListener(this), this)

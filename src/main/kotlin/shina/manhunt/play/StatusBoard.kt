@@ -23,6 +23,7 @@ class StatusBoard(private val plugin: Manhunt) {
     private val reserveObjective: Objective = board.registerNewObjective("mhreserve", Criteria.DUMMY, Component.text("备用血", NamedTextColor.AQUA)).also {
         it.displaySlot = DisplaySlot.BELOW_NAME
     }
+    private val lineText = mutableMapOf<String, String>()
     private val runnerTeam: Team = coloredTeam("mh_runners", NamedTextColor.GREEN)
     private val hunterTeam: Team = coloredTeam("mh_hunters", NamedTextColor.RED)
 
@@ -52,20 +53,21 @@ class StatusBoard(private val plugin: Manhunt) {
         val curse = combatLine()
         val runnerSlots = if (curse == null) MAX_LINES else MAX_LINES - 1
         if (curse != null) {
-            val score = objective.getScore(CURSE_ENTRY)
-            score.customName(curse)
-            score.score = MAX_LINES
+            show(CURSE_ENTRY, curse.first, curse.second, MAX_LINES)
         } else {
             board.resetScores(CURSE_ENTRY)
+            lineText.remove(CURSE_ENTRY)
         }
         val runners = session.roles.filter { it.value == Role.RUNNER }.keys.toList()
         val shown = runners.take(runnerSlots)
         shown.forEachIndexed { index, id ->
-            val score = objective.getScore(entry(index))
-            score.customName(line(id))
-            score.score = runnerSlots - index
+            val row = line(id)
+            show(entry(index), row.text, row.plain, runnerSlots - index)
         }
-        for (index in shown.size until MAX_LINES) board.resetScores(entry(index))
+        for (index in shown.size until MAX_LINES) {
+            board.resetScores(entry(index))
+            lineText.remove(entry(index))
+        }
         for (player in Bukkit.getOnlinePlayers()) {
             if (player.scoreboard !== board) player.scoreboard = board
         }
@@ -96,25 +98,39 @@ class StatusBoard(private val plugin: Manhunt) {
         }
     }
 
-    private fun line(id: UUID): Component {
+    private fun show(entry: String, text: Component, plain: String, score: Int) {
+        if (lineText[entry] != plain) {
+            board.resetScores(entry)
+            lineText[entry] = plain
+        }
+        val row = objective.getScore(entry)
+        row.customName(text)
+        row.score = score
+    }
+
+    private fun line(id: UUID): Row {
         val session = plugin.session
         val name = Bukkit.getOfflinePlayer(id).name ?: "未知"
         val reserve = session.reserve[id] ?: 0
         val state = when {
-            id in session.eliminated -> Component.text("死亡", NamedTextColor.RED)
-            id in session.downed -> Component.text("濒死", NamedTextColor.GOLD)
-            else -> Component.text("存活", NamedTextColor.GREEN)
+            id in session.eliminated -> "死亡" to NamedTextColor.RED
+            id in session.downed -> "濒死" to NamedTextColor.GOLD
+            else -> "存活" to NamedTextColor.GREEN
         }
-        return Component.text(name, NamedTextColor.WHITE)
+        val text = Component.text(name, NamedTextColor.WHITE)
             .append(Component.space())
-            .append(state)
+            .append(Component.text(state.first, state.second))
             .append(Component.text(" 备用$reserve", NamedTextColor.AQUA))
+        return Row(text, "$name ${state.first} 备用$reserve")
     }
 
-    private fun combatLine(): Component? {
+    private data class Row(val text: Component, val plain: String)
+
+    private fun combatLine(): Pair<Component, String>? {
         val end = plugin.session.combatCountdownEnd ?: return null
         val left = ((end - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-        return Component.text("战斗诅咒 ${left}秒", NamedTextColor.RED)
+        val plain = "战斗诅咒 ${left}秒"
+        return Component.text(plain, NamedTextColor.RED) to plain
     }
 
     private fun entry(index: Int) = "mh$index"

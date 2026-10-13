@@ -7,22 +7,33 @@ import org.bukkit.Bukkit
 import org.bukkit.Difficulty
 import org.bukkit.GameMode
 import org.bukkit.GameRules
+import org.bukkit.HeightMap
 import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.World
 import org.bukkit.attribute.Attribute
-import org.bukkit.block.Chest
+import org.bukkit.block.structure.Mirror
+import org.bukkit.block.structure.StructureRotation
 import org.bukkit.entity.Player
 import org.bukkit.potion.PotionEffect
 import org.bukkit.potion.PotionEffectType
+import org.bukkit.structure.Structure
 import shina.manhunt.play.setCrawling
 import shina.manhunt.play.warnTitle
-import org.bukkit.inventory.ItemStack
 import shina.manhunt.Manhunt
 import shina.manhunt.kit.Gear
-import kotlin.random.Random
+import java.util.Random
 
 object Match {
+    private const val HUT_STAND_X = 8
+    private const val HUT_STAND_Z = 8
+    private var hutStructure: Structure? = null
+
+    fun preloadHut(plugin: Manhunt) {
+        if (hutStructure != null) return
+        val input = plugin.getResource("hut.nbt") ?: return
+        hutStructure = input.use { Bukkit.getStructureManager().loadStructure(it) }
+    }
     fun joinMessage(player: Player) {
         player.sendMessage(Component.text("选择阵营： ")
             .append(Component.text("[加入猎人]").color(NamedTextColor.RED).clickEvent(ClickEvent.runCommand("/manhunt join hunter")))
@@ -45,7 +56,8 @@ object Match {
             it.setGameRule(GameRules.IMMEDIATE_RESPAWN, true)
             it.setGameRule(GameRules.LOCATOR_BAR, false)
         }
-        val hut = buildHut(world)
+        val hut = buildHut(plugin, world)
+        warmVillageCompasses(plugin)
         session.chest = Bukkit.createInventory(session.chestHolder, 54, Component.text("团队仓库"))
         session.chestHolder.bind(session.chest)
         Gear.placeXpButtons(session.chest, session.xpBank)
@@ -99,7 +111,25 @@ object Match {
             if (session.phase != Phase.PLAYING) return@Runnable
             for (runner in session.livingRunners()) clearAbsorb(runner)
         }, 5 * 60 * 20L)
+        plugin.ticker.refreshGlowSoon()
         Bukkit.broadcast(Component.text("游戏开始。").color(NamedTextColor.GREEN))
+    }
+
+    private fun warmVillageCompasses(plugin: Manhunt) {
+        val pending = plugin.session.livingRunners().map { it.uniqueId }.toMutableList()
+        Bukkit.getScheduler().runTaskTimer(plugin, { task ->
+            val session = plugin.session
+            if (session.phase != Phase.COUNTDOWN && session.phase != Phase.PLAYING) {
+                task.cancel()
+                return@runTaskTimer
+            }
+            val id = pending.removeFirstOrNull() ?: run {
+                task.cancel()
+                return@runTaskTimer
+            }
+            val player = Bukkit.getPlayer(id) ?: return@runTaskTimer
+            plugin.progress.retargetCompass(player, "village", skipCurrent = false, announce = false)
+        }, 1L, 5L)
     }
 
     fun eliminate(plugin: Manhunt, player: Player) {
@@ -107,6 +137,7 @@ object Match {
         if (session.role(player.uniqueId) != Role.RUNNER) return
         if (!session.eliminated.add(player.uniqueId)) return
         session.downed.remove(player.uniqueId)
+        session.downedAt.remove(player.uniqueId)
         session.giveUpSince.remove(player.uniqueId)
         val rescuers = session.rescue.filterValues { it.first == player.uniqueId }.keys.toList()
         session.rescue.entries.removeIf { it.key == player.uniqueId || it.value.first == player.uniqueId }
@@ -120,6 +151,7 @@ object Match {
         player.setCrawling(false)
         player.gameMode = GameMode.SPECTATOR
         player.warnTitle("淘汰", "你被淘汰了")
+        plugin.ticker.refreshGlowSoon()
         if (session.livingIds().isEmpty() && session.phase == Phase.PLAYING) {
             session.phase = Phase.ENDED
             Bukkit.broadcast(Component.text("猎人胜利。").color(NamedTextColor.RED))
@@ -190,20 +222,76 @@ object Match {
     private fun link(label: String, route: String): Component =
         Component.text("[$label]").color(NamedTextColor.YELLOW).clickEvent(ClickEvent.runCommand("/manhunt route $route"))
 
-    private fun buildHut(world: World): Location {
-        val ground = world.getHighestBlockYAt(0, 0).coerceAtLeast(world.minHeight + 1)
-        val y = ground + 1
-        for (x in -2..2) for (z in -2..2) for (dy in 0..3) {
-            val block = world.getBlockAt(x, y + dy, z)
-            val edge = x == -2 || x == 2 || z == -2 || z == 2 || dy == 0 || dy == 3
-            val door = z == 2 && x == 0 && dy in 1..2
-            block.type = if (edge && !door) Material.OAK_PLANKS else Material.AIR
+    private fun buildHut(plugin: Manhunt, world: World): Location {
+        preloadHut(plugin)
+        val structure = hutStructure
+        val spawn = world.spawnLocation
+        val origin = if (structure == null) plankHut(world, spawn) else placeHut(world, structure, spawn)
+        return origin.clone().add(HUT_STAND_X + 0.5, 1.0, HUT_STAND_Z + 0.5)
+    }
+
+    private fun placeHut(world: World, structure: Structure, spawn: Location): Location {
+        val size = structure.size
+        val width = size.blockX.coerceAtLeast(1)
+        val depth = size.blockZ.coerceAtLeast(1)
+        var bestX = spawn.blockX - HUT_STAND_X
+        var bestZ = spawn.blockZ - HUT_STAND_Z
+        var bestScore = Int.MAX_VALUE
+        var bestGround = surface(world, spawn.blockX, spawn.blockZ)
+        for (radius in intArrayOf(0, 16, 32)) {
+            val offsets = if (radius == 0) listOf(0 to 0) else ring(radius)
+            for ((dx, dz) in offsets) {
+                val ox = spawn.blockX + dx - HUT_STAND_X
+                val oz = spawn.blockZ + dz - HUT_STAND_Z
+                val heights = listOf(
+                    surface(world, ox, oz),
+                    surface(world, ox + width - 1, oz),
+                    surface(world, ox, oz + depth - 1),
+                    surface(world, ox + width - 1, oz + depth - 1),
+                    surface(world, ox + width / 2, oz + depth / 2)
+                )
+                val score = heights.max() - heights.min()
+                if (score < bestScore) {
+                    bestScore = score
+                    bestX = ox
+                    bestZ = oz
+                    bestGround = heights.max()
+                }
+            }
+            if (bestScore <= 2) break
         }
-        val chestBlock = world.getBlockAt(0, y, 0)
-        chestBlock.type = Material.CHEST
-        val chest = chestBlock.state as Chest
-        chest.blockInventory.addItem(ItemStack(Material.STICK, Random.nextInt(2, 5)))
-        chest.blockInventory.addItem(ItemStack(Material.ROTTEN_FLESH, Random.nextInt(6, 13)))
-        return Location(world, 0.5, y + 1.0, 1.5)
+        val origin = Location(world, bestX.toDouble(), bestGround.toDouble(), bestZ.toDouble())
+        structure.place(origin, false, StructureRotation.NONE, Mirror.NONE, 0, 1f, Random())
+        return origin
+    }
+
+    private fun plankHut(world: World, spawn: Location): Location {
+        val x = spawn.blockX - HUT_STAND_X
+        val z = spawn.blockZ - HUT_STAND_Z
+        val y = surface(world, spawn.blockX, spawn.blockZ)
+        for (dx in -2..2) for (dz in -2..2) for (dy in 0..3) {
+            val block = world.getBlockAt(x + dx, y + dy, z + dz)
+            val edge = dx == -2 || dx == 2 || dz == -2 || dz == 2 || dy == 0 || dy == 3
+            block.type = if (edge) Material.OAK_PLANKS else Material.AIR
+        }
+        world.getBlockAt(x, y + 1, z + 2).type = Material.AIR
+        world.getBlockAt(x, y + 2, z + 2).type = Material.AIR
+        return Location(world, x.toDouble(), y.toDouble(), z.toDouble())
+    }
+
+    private fun surface(world: World, x: Int, z: Int): Int =
+        world.getHighestBlockYAt(x, z, HeightMap.MOTION_BLOCKING_NO_LEAVES).coerceAtLeast(world.minHeight + 1)
+
+    private fun ring(radius: Int): List<Pair<Int, Int>> {
+        val points = mutableListOf<Pair<Int, Int>>()
+        var n = -radius
+        while (n <= radius) {
+            points += n to -radius
+            points += n to radius
+            points += -radius to n
+            points += radius to n
+            n += 16
+        }
+        return points.distinct()
     }
 }

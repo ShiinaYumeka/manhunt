@@ -100,7 +100,8 @@ class Progress(private val plugin: Manhunt) {
         if (key == NamespacedKey.minecraft("story/enchant_item") && session.role(player.uniqueId) == Role.RUNNER) supplyEnchant()
         if (key.namespace == "manhunt") {
             reward(player, key.key)
-            announce(player, event.advancement)
+            announce(event.advancement)
+            plugin.ticker.refreshGlowSoon()
         }
         if (session.role(player.uniqueId) == Role.RUNNER) share(event.advancement, player)
     }
@@ -220,7 +221,7 @@ class Progress(private val plugin: Manhunt) {
     private fun reward(player: Player, id: String, shared: Boolean = false) {
         val session = plugin.session
         when (id) {
-            "vitality" -> give(player, ItemStack(Material.IRON_INGOT, 3))
+            "vitality" -> give(player, ItemStack(Material.IRON_INGOT, 3), ItemStack(Material.BREAD, 5))
             "iron_pick" -> give(player, *Gear.copperLegsBoots().toTypedArray())
             "water" -> give(player, *Gear.copperHelmChest().toTypedArray())
             "nether" -> {
@@ -335,13 +336,13 @@ class Progress(private val plugin: Manhunt) {
         }
     }
 
-    private fun announce(player: Player, advancement: Advancement) {
+    private fun announce(advancement: Advancement) {
         val display = advancement.display ?: return
         val hover = display.title().color(NamedTextColor.GREEN)
             .append(Component.newline())
             .append(display.description().color(NamedTextColor.GRAY))
-        val title = display.title().color(NamedTextColor.GREEN).hoverEvent(HoverEvent.showText(hover))
-        Bukkit.broadcast(player.displayName().append(Component.text(" 取得了进度 ")).append(title))
+        val name = display.title().color(NamedTextColor.GREEN).hoverEvent(HoverEvent.showText(hover))
+        Bukkit.broadcast(Component.text("逃生团队获得了 ").append(name).append(Component.text(" 进度")))
     }
 
     private fun allowed(id: String): Boolean {
@@ -369,10 +370,7 @@ class Progress(private val plugin: Manhunt) {
             } finally {
                 session.suppress.remove(other.uniqueId)
             }
-            if (manhunt) {
-                reward(other, id, shared = true)
-                announce(other, advancement)
-            }
+            if (manhunt) reward(other, id, shared = true)
         }
     }
 
@@ -661,7 +659,7 @@ class Progress(private val plugin: Manhunt) {
         dir.mkdirs()
         val nodes = listOf(
             node("start", "minecraft:story/root", "游戏开始", "游戏开始\n奖励：指向最近村庄的指南针", "minecraft:compass"),
-            node("vitality", "manhunt:start", "生机", "抵达初始结构\n奖励：铁锭×3", "minecraft:iron_ingot"),
+            node("vitality", "manhunt:start", "生机", "抵达初始结构\n奖励：铁锭×3、面包×5", "minecraft:iron_ingot"),
             node("iron_pick", "manhunt:vitality", "这不是铁镐么？", "获得铁镐\n奖励：铜护腿、铜靴子", "minecraft:iron_pickaxe"),
             node("water", "manhunt:iron_pick", "生命之源", "获得水桶\n奖励：铜头盔、铜胸甲", "minecraft:water_bucket"),
             node("nether", "manhunt:water", "勇往直下", "进入地狱\n奖励：堡垒遗迹指南针、永久伤害吸收 V、备用血×60", "minecraft:netherrack"),
@@ -709,7 +707,7 @@ class Progress(private val plugin: Manhunt) {
             "title": { "text": ${json("[$title]")} },
             "description": { "text": ${json(description)} },
             "frame": "task",
-            "show_toast": true,
+            "show_toast": false,
             "announce_to_chat": false
           },
           "criteria": {

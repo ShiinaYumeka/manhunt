@@ -55,6 +55,7 @@ class GameListener(private val plugin: Manhunt) : Listener {
     fun onJoin(event: PlayerJoinEvent) {
         if (plugin.session.phase == Phase.LOBBY) Match.joinMessage(event.player)
         plugin.ticker.syncBoard()
+        plugin.ticker.refreshGlowSoon()
     }
 
     @EventHandler
@@ -112,7 +113,9 @@ class GameListener(private val plugin: Manhunt) : Listener {
             Match.eliminate(plugin, player)
             return
         }
-        val cost = if (event is EntityDamageByEntityEvent) 20 else ceil(event.finalDamage).toInt().coerceAtLeast(1)
+        val source = event.damageSource
+        val attacked = event is EntityDamageByEntityEvent || source.causingEntity != null || source.directEntity != null
+        val cost = if (attacked) 20 else ceil(event.finalDamage).toInt().coerceAtLeast(1)
         plugin.ticker.down(player, cost)
     }
 
@@ -300,13 +303,17 @@ class GameListener(private val plugin: Manhunt) : Listener {
         val player = event.player
         if (session.phase != Phase.PLAYING) return
         if (session.role(player.uniqueId) != Role.HUNTER || player.uniqueId in session.eliminated) return
-        plugin.server.scheduler.runTask(plugin, Runnable { plugin.hunterLoop.beginRespawn(player, opening = !session.early) })
+        plugin.server.scheduler.runTask(plugin, Runnable {
+            plugin.hunterLoop.beginRespawn(player, opening = !session.early)
+            plugin.ticker.refreshGlowSoon()
+        })
     }
 
     @EventHandler
     fun onWorld(event: PlayerChangedWorldEvent) {
         val session = plugin.session
         val player = event.player
+        plugin.ticker.refreshGlowSoon()
         if (session.phase != Phase.PLAYING || session.role(player.uniqueId) != Role.RUNNER) return
         val previous = session.currentSpot[player.uniqueId]
         if (previous?.world == event.from) {

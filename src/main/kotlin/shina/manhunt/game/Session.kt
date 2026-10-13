@@ -73,6 +73,7 @@ class Session(val plugin: Manhunt) {
     val reserve = mutableMapOf<UUID, Int>()
     val eliminated = mutableSetOf<UUID>()
     val downed = mutableSetOf<UUID>()
+    val downedAt = mutableMapOf<UUID, Long>()
     val rescue = mutableMapOf<UUID, Pair<UUID, Long>>()
     val giveUpSince = mutableMapOf<UUID, Long>()
     var rallyLeader: UUID? = null

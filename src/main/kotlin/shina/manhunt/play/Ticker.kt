@@ -67,13 +67,16 @@ class Ticker(private val plugin: Manhunt) {
 
     fun down(player: Player, hit: Int) {
         val session = plugin.session
+        if (!session.downed.add(player.uniqueId)) return
+        session.downedAt[player.uniqueId] = System.currentTimeMillis()
+        drain(player, hit)
+        syncBoard()
+        if (player.uniqueId in session.eliminated) return
         val max = player.getAttribute(Attribute.MAX_HEALTH)?.value ?: 20.0
         player.health = max / 2.0
         player.absorptionAmount = 0.0
         player.walkSpeed = 0f
         player.setCrawling(true)
-        session.downed.add(player.uniqueId)
-        drain(player, hit)
         player.world.playSound(player.location, Sound.ENTITY_PLAYER_HURT, 1f, 0.6f)
         player.warnTitle("濒死", "等待救援")
         for (mate in session.livingRunners()) {
@@ -91,7 +94,8 @@ class Ticker(private val plugin: Manhunt) {
             player.walkSpeed = 0f
             player.setCrawling(true)
             player.velocity = player.velocity.multiply(0)
-            drain(player, 1)
+            val since = session.downedAt[id] ?: now
+            if (now - since >= 1000) drain(player, 1)
             if (player.isSneaking) {
                 val start = session.giveUpSince.getOrPut(id) { now }
                 val left = ((5000 - (now - start) + 999) / 1000).coerceAtLeast(0)
@@ -139,6 +143,7 @@ class Ticker(private val plugin: Manhunt) {
             if (now - start >= 5000) {
                 session.rescue.remove(rescuer.uniqueId)
                 session.downed.remove(target.uniqueId)
+                session.downedAt.remove(target.uniqueId)
                 session.giveUpSince.remove(target.uniqueId)
                 rescuer.walkSpeed = 0.2f
                 target.walkSpeed = 0.2f
@@ -158,9 +163,20 @@ class Ticker(private val plugin: Manhunt) {
         }
     }
 
+    private var glowQueued = false
+
+    fun refreshGlowSoon() {
+        if (glowQueued) return
+        glowQueued = true
+        plugin.server.scheduler.runTask(plugin, Runnable {
+            glowQueued = false
+            refreshGlow()
+        })
+    }
+
     fun refreshGlow() {
         val session = plugin.session
-        if (session.phase != Phase.PLAYING) {
+        if (session.phase == Phase.ENDED) {
             teamGlow.clear()
             return
         }
