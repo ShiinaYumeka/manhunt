@@ -4,8 +4,6 @@ import io.papermc.paper.math.Position
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.event.HoverEvent
 import net.kyori.adventure.text.format.NamedTextColor
-import io.papermc.paper.registry.RegistryAccess
-import io.papermc.paper.registry.RegistryKey
 import org.bukkit.Bukkit
 import org.bukkit.Color
 import org.bukkit.Location
@@ -98,6 +96,12 @@ class Progress(private val plugin: Manhunt) {
         val key = event.advancement.key
         if (key == NamespacedKey.minecraft("end/kill_dragon")) Match.runnersWin(plugin)
         if (key == NamespacedKey.minecraft("story/enchant_item") && session.role(player.uniqueId) == Role.RUNNER) supplyEnchant()
+        if (session.role(player.uniqueId) == Role.RUNNER) {
+            when (key) {
+                NamespacedKey.minecraft("adventure/under_lock_and_key") -> award(player, "trial_vault")
+                NamespacedKey.minecraft("adventure/revaulting") -> award(player, "trial_ominous")
+            }
+        }
         if (key.namespace == "manhunt") {
             reward(player, key.key)
             announce(event.advancement)
@@ -162,7 +166,6 @@ class Progress(private val plugin: Manhunt) {
         if (structures.isEmpty()) return null
         val visited = plugin.session.visited[player.uniqueId].orEmpty()
         fun usable(found: Location): Boolean {
-            if (horizontalDistanceSq(player.location, found) <= 64.0 * 64.0) return false
             if (visited.any { it.covers(player.world.name, kind, found.x, found.z) }) return false
             if (exclude != null && exclude.world == player.world.name && exclude.kind == kind) {
                 val dx = found.x - exclude.x
@@ -246,7 +249,7 @@ class Progress(private val plugin: Manhunt) {
                     player,
                     ItemStack(Material.IRON_INGOT, 10),
                     ItemStack(Material.DIAMOND, 4),
-                    enchantingTableBook(20),
+                    Gear.enchantingTableBook(20),
                     Gear.structureCompass("stronghold", "要塞指南针")
                 )
                 retargetCompass(player, "stronghold", skipCurrent = false, announce = false)
@@ -284,11 +287,11 @@ class Progress(private val plugin: Manhunt) {
             "buckets" -> give(player, ItemStack(Material.LAVA_BUCKET), ItemStack(Material.COBWEB, 8))
             "efficiency" -> give(player, stored(org.bukkit.enchantments.Enchantment.EFFICIENCY))
             "trial_enter" -> give(player, ItemStack(Material.COOKED_BEEF, 10), ItemStack(Material.WIND_CHARGE, 4))
-            "trial_vault" -> session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 50
-            "trial_ominous" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 20
-                give(player, ItemStack(Material.GOLDEN_APPLE, 3))
+            "trial_vault" -> {
+                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 50
+                give(player, ItemStack(Material.OMINOUS_BOTTLE))
             }
+            "trial_ominous" -> give(player, ItemStack(Material.GOLDEN_APPLE, 3))
             "heavy_core" -> give(player, ItemStack(Material.BREEZE_ROD, 10))
             "ancient_enter" -> {
                 give(player, Gear.swiftCopperLegs())
@@ -316,6 +319,7 @@ class Progress(private val plugin: Manhunt) {
                 session.heavyDream = true
                 session.hunters().forEach { give(it, ItemStack(Material.TOTEM_OF_UNDYING)) }
             }
+            "trial_ominous" -> session.netherUnlocked = true
             "ancient_enter" -> session.hunters().forEach {
                 give(it, Gear.swiftCopperLegs())
                 effect(it, PotionEffectType.NIGHT_VISION, 4 * 60)
@@ -549,38 +553,6 @@ class Progress(private val plugin: Manhunt) {
         return item
     }
 
-    private fun enchantingTableBook(power: Int): ItemStack {
-        val registry = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT)
-        val pool = registry.filter {
-            !it.isCursed && !it.isTreasure && it.key != NamespacedKey.minecraft("lunge") && it.maxLevel > 0
-        }
-        var level = power + 1 + kotlin.random.Random.nextInt(2) + kotlin.random.Random.nextInt(2)
-        level = (level * (1.0 + (Math.random() + Math.random() - 1.0) * 0.15)).toInt().coerceAtLeast(1)
-        val chosen = mutableListOf<Pair<org.bukkit.enchantments.Enchantment, Int>>()
-        var available = selectable(pool, level).toMutableList()
-        while (available.isNotEmpty()) {
-            val pick = available.random()
-            chosen += pick
-            if (kotlin.random.Random.nextInt(50) > level) break
-            level /= 2
-            if (level <= 0) break
-            available = selectable(pool, level).filter { (ench, _) -> chosen.none { it.first == ench || it.first.conflictsWith(ench) } }.toMutableList()
-        }
-        if (chosen.isEmpty()) return stored(org.bukkit.enchantments.Enchantment.UNBREAKING, 1)
-        val item = ItemStack(Material.ENCHANTED_BOOK)
-        val meta = item.itemMeta as org.bukkit.inventory.meta.EnchantmentStorageMeta
-        for ((enchantment, enchantLevel) in chosen) meta.addStoredEnchant(enchantment, enchantLevel, true)
-        item.itemMeta = meta
-        return item
-    }
-
-    private fun selectable(pool: List<org.bukkit.enchantments.Enchantment>, level: Int) = pool.mapNotNull { enchantment ->
-        val enchantLevel = (enchantment.maxLevel downTo 1).firstOrNull { step ->
-            enchantment.getMinModifiedCost(step) <= level && level <= enchantment.getMaxModifiedCost(step)
-        } ?: return@mapNotNull null
-        enchantment to enchantLevel
-    }
-
     private fun splashFireResistance(): ItemStack {
         val item = ItemStack(Material.SPLASH_POTION)
         val meta = item.itemMeta as PotionMeta
@@ -686,8 +658,8 @@ class Progress(private val plugin: Manhunt) {
             node("buckets", "manhunt:start", "水泵运转中", "获得 5 个空桶\n奖励：岩浆桶×1、蜘蛛网×8", "minecraft:bucket"),
             node("efficiency", "manhunt:start", "高效", "获得钻石镐\n奖励：效率 I 附魔书", "minecraft:diamond_pickaxe"),
             node("trial_enter", "manhunt:route_trial", "Minecraft 试炼版", "进入试炼密室\n奖励：牛排×10、风弹×4", "minecraft:trial_spawner"),
-            node("trial_vault", "manhunt:trial_enter", "珍藏密敛", "开启普通宝库\n奖励：备用血×50", "minecraft:vault"),
-            node("trial_ominous", "manhunt:trial_vault", "饱经磨砺", "开启不祥宝库\n奖励：备用血×20、金苹果×3，解除地狱封锁", "minecraft:ominous_bottle"),
+            node("trial_vault", "manhunt:trial_enter", "珍藏密敛", "开启普通宝库\n奖励：备用血×50、不祥之瓶×1", "minecraft:vault"),
+            node("trial_ominous", "manhunt:trial_vault", "饱经磨砺", "开启不祥宝库\n奖励：金苹果×3，解除地狱封锁", "minecraft:ominous_bottle"),
             node("heavy_core", "manhunt:trial_ominous", "沉重之梦", "获得沉重核心\n奖励：旋风棒×10，猎人图腾×1", "minecraft:heavy_core"),
             node("ancient_enter", "manhunt:route_ancient", "静谧之地", "进入古城\n奖励：所有人迅捷潜行 II 铜护腿、夜视（4 分钟）", "minecraft:sculk_sensor"),
             node("gapple", "manhunt:ancient_enter", "君临天下", "获得附魔金苹果\n奖励：1000 经验、效率 IV 钻石锄", "minecraft:enchanted_golden_apple"),

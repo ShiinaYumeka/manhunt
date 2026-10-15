@@ -20,13 +20,14 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 class HunterLoop(private val plugin: Manhunt) {
-    fun beginRespawn(player: Player, opening: Boolean) {
+    fun beginRespawn(player: Player, opening: Boolean, immediate: Boolean = false) {
         val session = plugin.session
         val extra = if (opening || !session.early) 10 else 0
-        val seconds = session.respawnSeconds + extra
+        val seconds = if (immediate) 0 else session.respawnSeconds + extra
         player.gameMode = GameMode.SPECTATOR
         session.respawnReadyAt[player.uniqueId] = System.currentTimeMillis() + seconds * 1000L
-        player.sendMessage(Component.text("旁观 $seconds 秒后，在合法位置右键确认复活。").color(NamedTextColor.GRAY))
+        val text = if (seconds == 0) "可以立刻复活，在合法位置右键确认。" else "旁观 $seconds 秒后，在合法位置右键确认复活。"
+        player.sendMessage(Component.text(text).color(NamedTextColor.GRAY))
     }
 
     fun confirm(player: Player) {
@@ -64,16 +65,12 @@ class HunterLoop(private val plugin: Manhunt) {
     }
 
     fun ensureHunterTools(player: Player) {
-        val missing = mutableListOf<ItemStack>()
-        if (player.inventory.contents.none { it != null && Gear.isHunterCompass(it) }) missing += Gear.hunterCompass()
-        if (player.inventory.contents.none { it != null && Gear.isTeamChest(it) }) missing += Gear.teamChest()
-        if (missing.isEmpty()) return
+        if (player.inventory.contents.any { it != null && Gear.isTeamChest(it) }) return
+        val item = Gear.teamChest()
         val storage = player.inventory.storageContents
-        for (item in missing.sortedByDescending { Gear.isHunterCompass(it) }) {
-            val index = (8 downTo 0).firstOrNull { empty(storage[it]) }
-                ?: storage.indices.reversed().firstOrNull { empty(storage[it]) }
-            if (index == null) player.world.dropItem(player.location, item) else storage[index] = item
-        }
+        val index = (8 downTo 0).firstOrNull { empty(storage[it]) }
+            ?: storage.indices.reversed().firstOrNull { empty(storage[it]) }
+        if (index == null) player.world.dropItem(player.location, item) else storage[index] = item
         player.inventory.storageContents = storage
     }
 
@@ -148,8 +145,17 @@ class HunterLoop(private val plugin: Manhunt) {
                 }
                 player.clearExp()
                 session.xpBank += points
-                Gear.placeXpButtons(session.chest, session.xpBank)
-                player.sendActionBar(Component.text("已存入 $points 点，池中共 ${session.xpBank}"))
+                stored(player, session, points)
+            }
+            "deposit-some" -> {
+                val points = if (player.level > 0) levelPointDelta(player.level, player.exp, -1) else player.expPoints()
+                if (points <= 0) {
+                    player.sendActionBar(Component.text("没有可存入的经验"))
+                    return
+                }
+                if (player.level > 0) player.giveExpLevels(-1) else player.clearExp()
+                session.xpBank += points
+                stored(player, session, points)
             }
             "withdraw" -> {
                 val points = session.xpBank
@@ -159,11 +165,31 @@ class HunterLoop(private val plugin: Manhunt) {
                 }
                 session.xpBank = 0
                 player.giveExp(points)
-                Gear.placeXpButtons(session.chest, session.xpBank)
-                player.sendActionBar(Component.text("已取出 $points 点经验"))
+                taken(player, session, points)
+            }
+            "withdraw-some" -> {
+                if (session.xpBank <= 0) {
+                    player.sendActionBar(Component.text("经验池是空的"))
+                    return
+                }
+                val cost = levelPointDelta(player.level, player.exp, 1)
+                val points = minOf(cost, session.xpBank)
+                session.xpBank -= points
+                if (points == cost) player.giveExpLevels(1) else player.giveExp(points)
+                taken(player, session, points)
             }
             else -> player.sendMessage("/manhunt xp deposit|withdraw")
         }
+    }
+
+    private fun stored(player: Player, session: shina.manhunt.game.Session, points: Int) {
+        Gear.placeXpButtons(session.chest, session.xpBank)
+        player.sendActionBar(Component.text("已存入 $points 点，池中共 ${session.xpBank}"))
+    }
+
+    private fun taken(player: Player, session: shina.manhunt.game.Session, points: Int) {
+        Gear.placeXpButtons(session.chest, session.xpBank)
+        player.sendActionBar(Component.text("已取出 $points 点经验"))
     }
 
     fun cycle(player: Player) {
@@ -192,8 +218,8 @@ class HunterLoop(private val plugin: Manhunt) {
         if (runners.isEmpty()) return
         val runner = runners.random()
         val angle = Math.random() * Math.PI * 2
-        val x = runner.location.blockX + (50 * cos(angle)).toInt()
-        val z = runner.location.blockZ + (50 * sin(angle)).toInt()
+        val x = runner.location.blockX + (15 * cos(angle)).toInt()
+        val z = runner.location.blockZ + (15 * sin(angle)).toInt()
         val y = openHeight(runner.world, x, z, runner.location.blockY)
         val dest = Location(runner.world, x + 0.5, y.toDouble(), z + 0.5)
         clearBody(dest)
@@ -257,18 +283,26 @@ class HunterLoop(private val plugin: Manhunt) {
         runners.filter { it.world == hunter.world }.minByOrNull { it.location.distanceSquared(hunter.location) }
 }
 
-fun Player.expPoints(): Int {
-    fun toReach(level: Int): Int = when {
-        level <= 16 -> level * level + 6 * level
-        level <= 31 -> (2.5 * level * level - 40.5 * level + 360).toInt()
-        else -> (4.5 * level * level - 162.5 * level + 2220).toInt()
+fun Player.expPoints(): Int = pointsAt(level, exp)
+
+private fun levelPointDelta(level: Int, exp: Float, direction: Int): Int {
+    val next = (level + direction).coerceAtLeast(0)
+    return kotlin.math.abs(pointsAt(next, exp) - pointsAt(level, exp))
+}
+
+private fun pointsAt(level: Int, exp: Float): Int {
+    fun toReach(value: Int): Int = when {
+        value <= 16 -> value * value + 6 * value
+        value <= 31 -> (2.5 * value * value - 40.5 * value + 360).toInt()
+        else -> (4.5 * value * value - 162.5 * value + 2220).toInt()
     }
-    fun toNext(level: Int): Int = when {
-        level >= 31 -> 9 * level - 158
-        level >= 16 -> 5 * level - 38
-        else -> 2 * level + 7
+    fun toNext(value: Int): Int = when {
+        value >= 31 -> 9 * value - 158
+        value >= 16 -> 5 * value - 38
+        else -> 2 * value + 7
     }
-    return toReach(level) + ceil(exp * toNext(level)).toInt()
+    val safe = level.coerceAtLeast(0)
+    return toReach(safe) + ceil(exp.coerceIn(0f, 1f) * toNext(safe)).toInt()
 }
 
 fun Player.clearExp() {

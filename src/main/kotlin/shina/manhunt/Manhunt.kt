@@ -17,12 +17,16 @@ class Manhunt : JavaPlugin() {
 
     override fun onEnable() {
         instance = this
+        shina.manhunt.game.MapReset.cleanup(this)
         session = Session(this)
         progress = Progress(this)
         hunterLoop = HunterLoop(this)
         ticker = Ticker(this)
         progress.install()
-        server.scheduler.runTask(this, Runnable { shina.manhunt.game.Match.preloadHut(this) })
+        server.scheduler.runTask(this, Runnable {
+            shina.manhunt.game.Match.preloadHut(this)
+            server.worlds.forEach { shina.manhunt.game.Match.ensureHut(this, it) }
+        })
         server.worlds.forEach { it.setGameRule(GameRules.LOCATOR_BAR, false) }
         registerCommand("manhunt", "猎人游戏", ManhuntCommand(this))
         server.pluginManager.registerEvents(GameListener(this), this)

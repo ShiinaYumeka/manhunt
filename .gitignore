@@ -7,6 +7,9 @@
 # Gradle build folder
 build
 
+# IDE compiler output. Copies of src, not the source of truth.
+bin
+
 # IntelliJ
 out/
 .idea

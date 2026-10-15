@@ -10,6 +10,10 @@ import shina.manhunt.Manhunt
 class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
     override fun execute(stack: CommandSourceStack, args: Array<String>) {
         val sender = stack.sender
+        if (args.getOrNull(0) == "reset") {
+            MapReset.request(plugin, sender)
+            return
+        }
         if (sender !is Player) {
             sender.sendMessage("只能由玩家使用。")
             return
@@ -29,7 +33,7 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
             "xp" -> plugin.hunterLoop.xp(sender, args.getOrNull(1))
             "chest" -> plugin.hunterLoop.openChest(sender)
             "event" -> event(sender, args.getOrNull(1), args.getOrNull(2))
-            else -> sender.sendMessage("/manhunt join|leave|respawn|reserve|list|start|event")
+            else -> sender.sendMessage("/manhunt join|leave|respawn|reserve|list|start|event|reset")
         }
     }
 
@@ -118,7 +122,7 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
     }
 
     override fun suggest(stack: CommandSourceStack, args: Array<String>): List<String> {
-        if (args.size == 1) return listOf("join", "leave", "respawn", "reserve", "list", "start", "route", "xp", "chest", "event").filter { it.startsWith(args[0]) }
+        if (args.size == 1) return listOf("join", "leave", "respawn", "reserve", "list", "start", "route", "xp", "chest", "event", "reset").filter { it.startsWith(args[0]) }
         if (args.size == 2 && args[0] == "event") return Rule.entries.map { it.id }.filter { it.startsWith(args[1]) }
         if (args.size == 3 && args[0] == "event") return listOf("on", "off").filter { it.startsWith(args[2]) }
         if (args.size == 2 && args[0] == "join") return listOf("hunter", "runner").filter { it.startsWith(args[1]) }

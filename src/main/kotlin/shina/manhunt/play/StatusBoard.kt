@@ -50,14 +50,22 @@ class StatusBoard(private val plugin: Manhunt) {
             val name = Bukkit.getOfflinePlayer(id).name ?: continue
             reserveObjective.getScore(name).score = (session.reserve[id] ?: 0).coerceAtLeast(0)
         }
-        val curse = combatLine()
-        val runnerSlots = if (curse == null) MAX_LINES else MAX_LINES - 1
-        if (curse != null) {
-            show(CURSE_ENTRY, curse.first, curse.second, MAX_LINES)
-        } else {
-            board.resetScores(CURSE_ENTRY)
-            lineText.remove(CURSE_ENTRY)
+        val banners = buildList {
+            combatLine()?.let { add(CURSE_ENTRY to it) }
+            lockLine()?.let { add(LOCK_ENTRY to it) }
         }
+        var nextScore = MAX_LINES
+        val shownBanners = mutableSetOf<String>()
+        for ((entry, line) in banners) {
+            show(entry, line.first, line.second, nextScore--)
+            shownBanners += entry
+        }
+        for (entry in listOf(CURSE_ENTRY, LOCK_ENTRY)) {
+            if (entry in shownBanners) continue
+            board.resetScores(entry)
+            lineText.remove(entry)
+        }
+        val runnerSlots = nextScore
         val runners = session.roles.filter { it.value == Role.RUNNER }.keys.toList()
         val shown = runners.take(runnerSlots)
         shown.forEachIndexed { index, id ->
@@ -133,10 +141,19 @@ class StatusBoard(private val plugin: Manhunt) {
         return Component.text(plain, NamedTextColor.RED) to plain
     }
 
+    private fun lockLine(): Pair<Component, String>? {
+        val session = plugin.session
+        if (!session.netherLocked()) return null
+        val left = ((session.netherLockUntil - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+        val plain = "地狱封锁 ${left}秒"
+        return Component.text(plain, NamedTextColor.LIGHT_PURPLE) to plain
+    }
+
     private fun entry(index: Int) = "mh$index"
 
     private companion object {
         const val MAX_LINES = 15
         const val CURSE_ENTRY = "mhcurse"
+        const val LOCK_ENTRY = "mhlock"
     }
 }

@@ -76,9 +76,7 @@ class Session(val plugin: Manhunt) {
     val downedAt = mutableMapOf<UUID, Long>()
     val rescue = mutableMapOf<UUID, Pair<UUID, Long>>()
     val giveUpSince = mutableMapOf<UUID, Long>()
-    var rallyLeader: UUID? = null
-    var rallyUntil = 0L
-    val rallyChannel = mutableMapOf<UUID, Pair<Location, Long>>()
+    var rallyUsed = false
     var startedAt = 0L
     var early = false
     var mid = false
@@ -100,6 +98,8 @@ class Session(val plugin: Manhunt) {
     val huntCooldownUntil = mutableMapOf<UUID, Long>()
     val huntCountdownEnd = mutableMapOf<UUID, Long>()
     val huntReturn = mutableSetOf<UUID>()
+    val damageDealt = mutableMapOf<UUID, Double>()
+    val damageTaken = mutableMapOf<UUID, Double>()
     val respawnReadyAt = mutableMapOf<UUID, Long>()
     val compassTarget = mutableMapOf<UUID, UUID>()
     val currentSpot = mutableMapOf<UUID, Location>()

@@ -41,10 +41,11 @@ object Gear {
     private val giftKey get() = NamespacedKey(Manhunt.instance, "gift")
     private val rallyKey get() = NamespacedKey(Manhunt.instance, "rally")
     private val furnaceKey get() = NamespacedKey(Manhunt.instance, "fast_furnace")
+    private val xpButtonKey get() = NamespacedKey(Manhunt.instance, "xp_button")
     private val xpDepositKey get() = NamespacedKey(Manhunt.instance, "xp_deposit")
     private val xpWithdrawKey get() = NamespacedKey(Manhunt.instance, "xp_withdraw")
-    const val XP_DEPOSIT_SLOT = 52
-    const val XP_WITHDRAW_SLOT = 53
+    const val XP_SLOT = 53
+    private const val XP_OLD_SLOT = 52
 
     fun isKit(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(kitKey, PersistentDataType.BYTE) == true
     fun isHunterCompass(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(hunterCompass, PersistentDataType.BYTE) == true
@@ -54,30 +55,44 @@ object Gear {
     fun isGift(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(giftKey, PersistentDataType.STRING) == true
     fun isRally(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(rallyKey, PersistentDataType.BYTE) == true
     fun isFastFurnace(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(furnaceKey, PersistentDataType.BYTE) == true
-    fun isXpDeposit(item: ItemStack?): Boolean = item?.itemMeta?.persistentDataContainer?.has(xpDepositKey, PersistentDataType.BYTE) == true
-    fun isXpWithdraw(item: ItemStack?): Boolean = item?.itemMeta?.persistentDataContainer?.has(xpWithdrawKey, PersistentDataType.BYTE) == true
-    fun isXpButton(item: ItemStack?): Boolean = isXpDeposit(item) || isXpWithdraw(item)
-
-    fun placeXpButtons(inventory: org.bukkit.inventory.Inventory, bank: Int) {
-        inventory.setItem(XP_DEPOSIT_SLOT, xpButton(Material.EXPERIENCE_BOTTLE, "存入经验", NamedTextColor.AQUA, "左键存入身上的全部经验", bank, xpDepositKey))
-        inventory.setItem(XP_WITHDRAW_SLOT, xpButton(Material.GLASS_BOTTLE, "取出经验", NamedTextColor.GOLD, "右键取出经验池里的全部经验", bank, xpWithdrawKey))
+    fun isXpButton(item: ItemStack?): Boolean {
+        val data = item?.itemMeta?.persistentDataContainer ?: return false
+        return data.has(xpButtonKey, PersistentDataType.BYTE) ||
+            data.has(xpDepositKey, PersistentDataType.BYTE) ||
+            data.has(xpWithdrawKey, PersistentDataType.BYTE)
     }
 
-    private fun xpButton(material: Material, title: String, color: NamedTextColor, action: String, bank: Int, key: NamespacedKey): ItemStack {
-        val item = named(material, title, color)
+    fun placeXpButtons(inventory: org.bukkit.inventory.Inventory, bank: Int) {
+        if (isXpButton(inventory.getItem(XP_OLD_SLOT))) inventory.setItem(XP_OLD_SLOT, null)
+        inventory.setItem(XP_SLOT, xpButton(bank))
+    }
+
+    private fun xpButton(bank: Int): ItemStack {
+        val item = named(Material.EXPERIENCE_BOTTLE, "经验", NamedTextColor.AQUA)
         val meta = item.itemMeta
-        meta.lore(listOf(text(action, NamedTextColor.GRAY), text("经验池：$bank", NamedTextColor.WHITE)))
+        meta.lore(listOf(
+            text("左键存入全部，右键取出全部", NamedTextColor.GRAY),
+            text("Shift+左键存入 1 级，Shift+右键取出 1 级", NamedTextColor.GRAY),
+            text("经验池：$bank", NamedTextColor.WHITE)
+        ))
         item.itemMeta = meta
-        mark(item, key)
+        mark(item, xpButtonKey)
         return item
     }
 
-    fun hunterCompass(): ItemStack = named(Material.COMPASS, "猎人指南针", NamedTextColor.RED).also { mark(it, hunterCompass) }
+    fun hunterCompass(): ItemStack = named(Material.COMPASS, "猎人指南针", NamedTextColor.RED).also {
+        mark(it, hunterCompass)
+        val meta = it.itemMeta
+        meta.lore(listOf(text("右键切换追踪目标", NamedTextColor.GRAY), text("不能丢出", NamedTextColor.GRAY)))
+        it.itemMeta = meta
+    }
 
     fun labelHunterCompass(item: ItemStack, targetName: String, nearest: Boolean) {
         if (!isHunterCompass(item)) return
         val meta = item.itemMeta ?: return
         val title = if (nearest) "追踪 $targetName 【最近】" else "追踪 $targetName"
+        val current = meta.customName()?.let { net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(it) }
+        if (current == title) return
         meta.customName(text(title, if (nearest) NamedTextColor.GOLD else NamedTextColor.RED))
         item.itemMeta = meta
     }
@@ -85,7 +100,7 @@ object Gear {
     fun teamChest(): ItemStack = named(Material.CHEST, "团队仓库", NamedTextColor.GOLD).also { mark(it, chestKey) }
     fun rallyItem(): ItemStack = named(Material.RECOVERY_COMPASS, "集结", NamedTextColor.AQUA).also {
         val meta = it.itemMeta
-        meta.lore(listOf(text("右键使用一次后消失", NamedTextColor.GRAY), text("原地等待 5 秒后传送到发起者身边", NamedTextColor.GRAY)))
+        meta.lore(listOf(text("全队只能使用一次", NamedTextColor.GRAY), text("右键后立刻把队友召到身边", NamedTextColor.GRAY)))
         it.itemMeta = meta
         mark(it, rallyKey)
     }
@@ -271,6 +286,7 @@ object Gear {
         val meta = item.itemMeta
         meta.persistentDataContainer.set(compassKindKey, PersistentDataType.STRING, kind)
         if (kind == "village") meta.persistentDataContainer.set(runnerCompass, PersistentDataType.BYTE, 1)
+        meta.lore(listOf(text("右键指向下一座", NamedTextColor.GRAY)))
         item.itemMeta = meta
         return item
     }
@@ -347,7 +363,7 @@ object Gear {
         entry(10) { listOf(stack(Material.GOLDEN_APPLE, 1)) },
         entry(10) { listOf(stack(Material.WIND_CHARGE, 4)) },
         entry(10) { listOf(shipBreaker()) },
-        entry(10) { listOf(randomBook(15)) },
+        entry(10) { listOf(enchantingTableBook(15)) },
         entry(10) { listOf(ItemStack(Material.FISHING_ROD)) },
         entry(10) { listOf(snack(10)) },
         entry(10) { listOf(voidShovel()) }
@@ -371,7 +387,7 @@ object Gear {
         val item = ItemStack(Material.WOODEN_SPEAR)
         item.setData(DataComponentTypes.CUSTOM_NAME, text("破舰者", NamedTextColor.AQUA))
         item.setData(DataComponentTypes.LORE, ItemLore.lore(listOf(
-            text("攻击命中敌人盾牌后，使其禁用120秒。", NamedTextColor.WHITE),
+            text("攻击命中敌人盾牌后，使其禁用30秒。", NamedTextColor.WHITE),
             text("-需要蓄力满才可以进行攻击", NamedTextColor.WHITE),
             text("-只能使用两次", NamedTextColor.WHITE),
             text("*你不会永远地安全，不会永远的逃脱", NamedTextColor.GRAY),
@@ -384,7 +400,7 @@ object Gear {
         item.setData(DataComponentTypes.ITEM_MODEL, Key.key("minecraft:wooden_axe"))
         item.setData(DataComponentTypes.MAX_DAMAGE, 1)
         item.setData(DataComponentTypes.REPAIR_COST, 99)
-        item.setData(DataComponentTypes.WEAPON, Weapon.weapon().disableBlockingForSeconds(10f).itemDamagePerAttack(1).build())
+        item.setData(DataComponentTypes.WEAPON, Weapon.weapon().disableBlockingForSeconds(30f).itemDamagePerAttack(1).build())
         item.setData(DataComponentTypes.KINETIC_WEAPON, KineticWeapon.kineticWeapon().delayTicks(9999999).build())
         item.setData(
             DataComponentTypes.ATTACK_RANGE,
@@ -439,7 +455,7 @@ object Gear {
             text(" 1 攻击速度", NamedTextColor.DARK_GREEN)
         )))
         item.setData(DataComponentTypes.CUSTOM_MODEL_DATA, CustomModelData.customModelData().addFloat(1f).build())
-        item.setData(DataComponentTypes.MAX_DAMAGE, 3)
+        item.setData(DataComponentTypes.MAX_DAMAGE, 5)
         item.setData(
             DataComponentTypes.ATTRIBUTE_MODIFIERS,
             ItemAttributeModifiers.itemAttributes()
@@ -457,10 +473,40 @@ object Gear {
         return item
     }
 
-    private fun randomBook(level: Int): ItemStack {
-        val choices = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT)
-            .filter { !it.isCursed && it.key != NamespacedKey.minecraft("lunge") }
-        return book(choices.random(), level)
+    fun enchantingTableBook(power: Int): ItemStack {
+        val registry = RegistryAccess.registryAccess().getRegistry(RegistryKey.ENCHANTMENT)
+        val pool = registry.filter {
+            !it.isCursed && !it.isTreasure && it.key != NamespacedKey.minecraft("lunge") && it.maxLevel > 0
+        }
+        var level = power + 1 + Random.nextInt(2) + Random.nextInt(2)
+        level = (level * (1.0 + (Math.random() + Math.random() - 1.0) * 0.15)).toInt().coerceAtLeast(1)
+        val chosen = mutableListOf<Pair<Enchantment, Int>>()
+        var available = selectable(pool, level).toMutableList()
+        while (available.isNotEmpty()) {
+            val pick = available.random()
+            chosen += pick
+            if (Random.nextInt(50) > level) break
+            level /= 2
+            if (level <= 0) break
+            available = selectable(pool, level).filter { (ench, _) -> chosen.none { it.first == ench || it.first.conflictsWith(ench) } }.toMutableList()
+        }
+        if (chosen.isEmpty()) return book(Enchantment.UNBREAKING, 1)
+        return book(chosen)
+    }
+
+    private fun selectable(pool: List<Enchantment>, level: Int) = pool.mapNotNull { enchantment ->
+        val enchantLevel = (enchantment.maxLevel downTo 1).firstOrNull { step ->
+            enchantment.getMinModifiedCost(step) <= level && level <= enchantment.getMaxModifiedCost(step)
+        } ?: return@mapNotNull null
+        enchantment to enchantLevel
+    }
+
+    private fun book(enchants: List<Pair<Enchantment, Int>>): ItemStack {
+        val item = ItemStack(Material.ENCHANTED_BOOK)
+        val meta = item.itemMeta as org.bukkit.inventory.meta.EnchantmentStorageMeta
+        for ((enchantment, enchantLevel) in enchants) meta.addStoredEnchant(enchantment, enchantLevel, true)
+        item.itemMeta = meta
+        return item
     }
 
     private fun roll(pool: List<Pair<Int, () -> List<ItemStack>>>): List<ItemStack> {

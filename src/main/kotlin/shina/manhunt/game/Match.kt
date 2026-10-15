@@ -3,6 +3,7 @@ package shina.manhunt.game
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.event.ClickEvent
 import net.kyori.adventure.text.format.NamedTextColor
+import net.kyori.adventure.title.Title
 import org.bukkit.Bukkit
 import org.bukkit.Difficulty
 import org.bukkit.GameMode
@@ -10,8 +11,10 @@ import org.bukkit.GameRules
 import org.bukkit.HeightMap
 import org.bukkit.Location
 import org.bukkit.Material
+import org.bukkit.Sound
 import org.bukkit.World
 import org.bukkit.attribute.Attribute
+import org.bukkit.block.Chest
 import org.bukkit.block.structure.Mirror
 import org.bukkit.block.structure.StructureRotation
 import org.bukkit.entity.Player
@@ -20,8 +23,10 @@ import org.bukkit.potion.PotionEffectType
 import org.bukkit.structure.Structure
 import shina.manhunt.play.setCrawling
 import shina.manhunt.play.warnTitle
+import org.bukkit.inventory.ItemStack
 import shina.manhunt.Manhunt
 import shina.manhunt.kit.Gear
+import java.time.Duration
 import java.util.Random
 
 object Match {
@@ -56,7 +61,8 @@ object Match {
             it.setGameRule(GameRules.IMMEDIATE_RESPAWN, true)
             it.setGameRule(GameRules.LOCATOR_BAR, false)
         }
-        val hut = buildHut(plugin, world)
+        val hut = stand(plugin, world)
+        placeSupplyChest(hut)
         warmVillageCompasses(plugin)
         session.chest = Bukkit.createInventory(session.chestHolder, 54, Component.text("团队仓库"))
         session.chestHolder.bind(session.chest)
@@ -152,20 +158,34 @@ object Match {
         player.gameMode = GameMode.SPECTATOR
         player.warnTitle("淘汰", "你被淘汰了")
         plugin.ticker.refreshGlowSoon()
-        if (session.livingIds().isEmpty() && session.phase == Phase.PLAYING) {
-            session.phase = Phase.ENDED
-            Bukkit.broadcast(Component.text("猎人胜利。").color(NamedTextColor.RED))
-        }
+        if (session.livingIds().isEmpty() && session.phase == Phase.PLAYING) huntersWin(plugin)
     }
 
     fun huntersWinIfAllDown(plugin: Manhunt) {
         val session = plugin.session
         if (session.phase != Phase.PLAYING) return
         val living = session.livingIds()
-        if (living.isNotEmpty() && living.all { it in session.downed }) {
-            session.phase = Phase.ENDED
-            Bukkit.broadcast(Component.text("猎人胜利。").color(NamedTextColor.RED))
+        if (living.isNotEmpty() && living.all { it in session.downed }) huntersWin(plugin)
+    }
+
+    fun huntersWin(plugin: Manhunt) {
+        val session = plugin.session
+        if (session.phase == Phase.ENDED) return
+        session.phase = Phase.ENDED
+        Bukkit.broadcast(Component.text("猎人胜利。").color(NamedTextColor.RED))
+        val title = Title.title(
+            Component.text("猎人胜利", NamedTextColor.RED),
+            Component.text("GG", NamedTextColor.GOLD),
+            Title.Times.times(Duration.ofMillis(100), Duration.ofSeconds(4), Duration.ofMillis(800))
+        )
+        for (player in Bukkit.getOnlinePlayers()) {
+            player.showTitle(title)
+            player.playSound(player, Sound.BLOCK_NOTE_BLOCK_BIT, 0.7f, 1.0f)
         }
+        Bukkit.getScheduler().runTaskLater(plugin, Runnable {
+            for (player in Bukkit.getOnlinePlayers()) player.playSound(player, Sound.BLOCK_NOTE_BLOCK_BIT, 0.7f, 1.26f)
+        }, 4L)
+        showStats(plugin)
     }
 
     fun runnersWin(plugin: Manhunt) {
@@ -173,6 +193,22 @@ object Match {
         if (session.phase != Phase.PLAYING) return
         session.phase = Phase.ENDED
         Bukkit.broadcast(Component.text("逃生胜利。").color(NamedTextColor.GREEN))
+        showStats(plugin)
+    }
+
+    private fun showStats(plugin: Manhunt) {
+        val session = plugin.session
+        Bukkit.broadcast(Component.text("伤害统计").color(NamedTextColor.GOLD))
+        val rows = session.roles.map { (id, role) ->
+            val name = Bukkit.getOfflinePlayer(id).name ?: "未知"
+            Triple(role, name, (session.damageDealt[id] ?: 0.0) to (session.damageTaken[id] ?: 0.0))
+        }.sortedByDescending { it.third.first }
+        for ((role, name, pair) in rows) {
+            val side = if (role == Role.HUNTER) "猎人" else "逃生"
+            val dealt = String.format("%.1f", pair.first)
+            val taken = String.format("%.1f", pair.second)
+            Bukkit.broadcast(Component.text("$side $name  造成 $dealt  承受 $taken"))
+        }
     }
 
     fun promptRoute(plugin: Manhunt) {
@@ -222,12 +258,47 @@ object Match {
     private fun link(label: String, route: String): Component =
         Component.text("[$label]").color(NamedTextColor.YELLOW).clickEvent(ClickEvent.runCommand("/manhunt route $route"))
 
+    fun ensureHut(plugin: Manhunt, world: World) {
+        if (world.environment != World.Environment.NORMAL) return
+        if (marker(world).isFile) return
+        val origin = buildHut(plugin, world)
+        marker(world).writeText("${origin.blockX} ${origin.blockY} ${origin.blockZ}")
+    }
+
+    fun stand(plugin: Manhunt, world: World): Location {
+        ensureHut(plugin, world)
+        val origin = readOrigin(world) ?: world.spawnLocation
+        return origin.clone().add(HUT_STAND_X + 0.5, 1.0, HUT_STAND_Z + 0.5)
+    }
+
+    private fun placeSupplyChest(stand: Location) {
+        val world = stand.world ?: return
+        val block = world.getBlockAt(stand.blockX + 2, stand.blockY, stand.blockZ)
+        block.type = Material.CHEST
+        val chest = block.state as Chest
+        chest.blockInventory.clear()
+        chest.blockInventory.addItem(ItemStack(Material.STICK, Random().nextInt(2, 5)))
+        chest.blockInventory.addItem(ItemStack(Material.ROTTEN_FLESH, Random().nextInt(6, 13)))
+    }
+
     private fun buildHut(plugin: Manhunt, world: World): Location {
         preloadHut(plugin)
         val structure = hutStructure
         val spawn = world.spawnLocation
-        val origin = if (structure == null) plankHut(world, spawn) else placeHut(world, structure, spawn)
-        return origin.clone().add(HUT_STAND_X + 0.5, 1.0, HUT_STAND_Z + 0.5)
+        return if (structure == null) plankHut(world, spawn) else placeHut(world, structure, spawn)
+    }
+
+    private fun marker(world: World) = java.io.File(world.worldFolder, "manhunt-hut.txt")
+
+    private fun readOrigin(world: World): Location? {
+        val file = marker(world)
+        if (!file.isFile) return null
+        val parts = file.readText().trim().split(" ")
+        if (parts.size != 3) return null
+        val x = parts[0].toIntOrNull() ?: return null
+        val y = parts[1].toIntOrNull() ?: return null
+        val z = parts[2].toIntOrNull() ?: return null
+        return Location(world, x.toDouble(), y.toDouble(), z.toDouble())
     }
 
     private fun placeHut(world: World, structure: Structure, spawn: Location): Location {

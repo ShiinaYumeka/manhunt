@@ -39,7 +39,6 @@ class Ticker(private val plugin: Manhunt) {
         scanRunners(now)
         tickDowned(now)
         tickRescue(now)
-        tickRally(now)
         tickHunters(now)
         tickCombat(now)
         tickCompasses()
@@ -211,56 +210,31 @@ class Ticker(private val plugin: Manhunt) {
     fun useRally(player: Player): Boolean {
         val session = plugin.session
         if (session.phase != Phase.PLAYING || session.role(player.uniqueId) != shina.manhunt.game.Role.RUNNER) return false
-        if (player.uniqueId in session.downed || player.gameMode == GameMode.SPECTATOR) {
+        if (player.uniqueId in session.downed || player.gameMode == GameMode.SPECTATOR || player.uniqueId in session.eliminated) {
             player.warnTitle("无法集结", "当前状态不能使用")
             return false
         }
-        if (player.uniqueId in session.rallyChannel) return false
-        val now = System.currentTimeMillis()
-        val leaderId = session.rallyLeader
-        val leader = leaderId?.let { Bukkit.getPlayer(it) }
-        val live = leaderId != null && now < session.rallyUntil && leader != null &&
-            leaderId !in session.eliminated && leaderId !in session.downed && leaderId != player.uniqueId
-        if (!live) {
-            session.rallyLeader = player.uniqueId
-            session.rallyUntil = now + 60_000
-            session.rallyChannel.remove(player.uniqueId)
-            for (runner in session.livingRunners()) runner.warnTitle("集结", "${player.name} 发起集结")
-            return true
+        if (session.rallyUsed) {
+            player.warnTitle("无法集结", "集结已经用过")
+            return false
         }
-        session.rallyChannel[player.uniqueId] = player.location.clone() to now
-        player.sendActionBar(Component.text("原地等待 5 秒"))
+        session.rallyUsed = true
+        val dest = player.location.clone()
+        for (mate in session.livingRunners()) {
+            if (mate == player || mate.uniqueId in session.downed || mate.gameMode == GameMode.SPECTATOR) continue
+            mate.teleport(dest)
+            mate.fallDistance = 0f
+            mate.sendMessage(Component.text("已被召回到 ${player.name} 身边。").color(NamedTextColor.GREEN))
+        }
+        for (online in Bukkit.getOnlinePlayers()) {
+            val inventory = online.inventory
+            for (slot in inventory.storageContents.indices) {
+                val item = inventory.storageContents[slot] ?: continue
+                if (Gear.isRally(item)) inventory.setItem(slot, null)
+            }
+        }
+        player.sendMessage(Component.text("已召回队友。").color(NamedTextColor.GREEN))
         return true
-    }
-
-    private fun tickRally(now: Long) {
-        val session = plugin.session
-        val leaderId = session.rallyLeader ?: return
-        val leader = Bukkit.getPlayer(leaderId)
-        if (now >= session.rallyUntil || leader == null || leaderId in session.eliminated || leaderId in session.downed) {
-            session.rallyLeader = null
-            session.rallyChannel.clear()
-            return
-        }
-        val iterator = session.rallyChannel.iterator()
-        while (iterator.hasNext()) {
-            val (id, pair) = iterator.next()
-            val (startLoc, start) = pair
-            val player = Bukkit.getPlayer(id)
-            if (player == null || id in session.downed || player.world != startLoc.world || player.location.distanceSquared(startLoc) > 0.36) {
-                iterator.remove()
-                player?.warnTitle("集结中断", "需要留在原地")
-                continue
-            }
-            val left = ((5000 - (now - start) + 999) / 1000).coerceAtLeast(0)
-            player.sendActionBar(Component.text("集结传送 $left 秒"))
-            if (now - start >= 5000) {
-                iterator.remove()
-                player.teleport(leader.location)
-                player.fallDistance = 0f
-                player.sendMessage(Component.text("已传送到 ${leader.name}。").color(NamedTextColor.GREEN))
-            }
-        }
     }
 
     private fun scanRunners(now: Long) {
@@ -336,7 +310,7 @@ class Ticker(private val plugin: Manhunt) {
                             session.huntCooldownUntil[hunter.uniqueId] = now + 60_000
                             session.huntReturn.add(hunter.uniqueId)
                             hunter.clearTitle()
-                            plugin.hunterLoop.beginRespawn(hunter, opening = !session.early)
+                            plugin.hunterLoop.beginRespawn(hunter, opening = !session.early, immediate = true)
                         } else {
                             val left = ((end - now + 999) / 1000).coerceAtLeast(1)
                             hunter.warnTitle("狩猎诅咒", "$left 秒后进入待复活", Duration.ofMillis(1200))
@@ -438,9 +412,9 @@ class Ticker(private val plugin: Manhunt) {
 
     private fun aim(player: Player, match: (ItemStack) -> Boolean, spot: Location) {
         if (spot.world != player.world) return
-        val storage = player.inventory.storageContents
-        for (slot in storage.indices) {
-            val item = storage[slot] ?: continue
+        val inventory = player.inventory
+        for (slot in 0 until inventory.size) {
+            val item = inventory.getItem(slot) ?: continue
             if (!match(item)) continue
             val meta = item.itemMeta as? CompassMeta ?: continue
             val current = meta.lodestone
@@ -450,7 +424,6 @@ class Ticker(private val plugin: Manhunt) {
             meta.lodestone = spot
             meta.isLodestoneTracked = false
             item.itemMeta = meta
-            player.inventory.setItem(slot, item)
         }
     }
 
