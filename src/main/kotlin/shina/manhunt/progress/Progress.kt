@@ -225,26 +225,23 @@ class Progress(private val plugin: Manhunt) {
         val session = plugin.session
         when (id) {
             "vitality" -> give(player, ItemStack(Material.IRON_INGOT, 3), ItemStack(Material.BREAD, 5))
-            "iron_pick" -> give(player, *Gear.copperLegsBoots().toTypedArray())
-            "water" -> give(player, *Gear.copperHelmChest().toTypedArray())
+            "iron_pick" -> give(player, *Gear.copperLegsBoots().toTypedArray(), ItemStack(Material.BREAD, 5))
+            "water" -> give(player, *Gear.copperHelmChest().toTypedArray(), ItemStack(Material.BREAD, 5))
             "nether" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 60
+                plugin.session.restoreReserve(player.uniqueId, 100)
                 giveCompass(player, "bastion", "堡垒遗迹指南针")
                 permanentAbsorption(player)
+                give(player, ItemStack(Material.BREAD, 5))
             }
             "bastion" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 40
-                give(player, ItemStack(Material.GOLDEN_HELMET), ItemStack(Material.IRON_INGOT, 2))
+                give(player, ItemStack(Material.GOLDEN_HELMET), ItemStack(Material.IRON_INGOT, 2), ItemStack(Material.BREAD, 5))
                 growHealth(player, 2.0)
             }
             "pearls" -> giveCompass(player, "fortress", "下界要塞指南针")
             "obsidian" -> give(player, ItemStack(Material.IRON_BOOTS), splashFireResistance())
-            "fortress" -> session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 60
-            "blaze" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 40
-                give(player, ItemStack(Material.DIAMOND, 2), ItemStack(Material.BOOK))
-            }
+            "blaze" -> give(player, ItemStack(Material.DIAMOND, 2), ItemStack(Material.BOOK))
             "return_overworld" -> {
+                plugin.session.restoreReserve(player.uniqueId, 100)
                 give(
                     player,
                     ItemStack(Material.IRON_INGOT, 10),
@@ -256,41 +253,34 @@ class Progress(private val plugin: Manhunt) {
             }
             "stronghold" -> player.giveExp(2000)
             "enter_end" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 100
+                plugin.session.restoreReserve(player.uniqueId, 100)
                 give(player, ItemStack(Material.DIAMOND, 8))
             }
-            "full_iron" -> give(player, ItemStack(Material.IRON_INGOT, 7), ItemStack(Material.COBWEB, 4))
+            "full_iron" -> give(player, ItemStack(Material.IRON_INGOT, 7), ItemStack(Material.COBWEB, 4), ItemStack(Material.BREAD, 5))
             "route_nether" -> give(player, unbreakingPick())
             "route_trial" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 50
                 giveCompass(player, "trial", "试炼密室指南针")
+                give(player, Gear.peachSword())
             }
             "route_ancient" -> {
                 giveCompass(player, "ancient", "古城指南针")
                 effect(player, PotionEffectType.SPEED, 2 * 60)
             }
             "route_mineshaft" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 20
                 give(player, ItemStack(Material.DIAMOND, 2))
                 giveCompass(player, "mineshaft", "废弃矿井指南针")
             }
             "bread" -> give(player, ItemStack(Material.APPLE, 4))
             "feast" -> give(player, ItemStack(Material.GOLD_INGOT, 4), ItemStack(Material.IRON_INGOT, 3))
             "miner" -> give(player, Gear.fastFurnace())
-            "old_miner" -> give(player, ItemStack(Material.BLAST_FURNACE), ItemStack(Material.COAL, 8))
-            "got_diamond" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 10
-                give(player, ItemStack(Material.IRON_INGOT, 5))
-            }
-            "gold_miner" -> give(player, ItemStack(Material.BLAST_FURNACE), ItemStack(Material.COAL_BLOCK, 2), ItemStack(Material.GOLDEN_APPLE))
+            "old_miner" -> give(player, ItemStack(Material.BLAST_FURNACE), ItemStack(Material.COAL, 8), ItemStack(Material.BREAD, 5))
+            "got_diamond" -> give(player, ItemStack(Material.IRON_INGOT, 5), ItemStack(Material.BREAD, 5))
+            "gold_miner" -> give(player, ItemStack(Material.BLAST_FURNACE), ItemStack(Material.COAL_BLOCK, 2), ItemStack(Material.GOLDEN_APPLE), ItemStack(Material.BREAD, 5))
             "crossbow" -> give(player, ItemStack(Material.ARROW, 5), slownessArrows())
             "buckets" -> give(player, ItemStack(Material.LAVA_BUCKET), ItemStack(Material.COBWEB, 8))
             "efficiency" -> give(player, stored(org.bukkit.enchantments.Enchantment.EFFICIENCY))
             "trial_enter" -> give(player, ItemStack(Material.COOKED_BEEF, 10), ItemStack(Material.WIND_CHARGE, 4))
-            "trial_vault" -> {
-                session.reserve[player.uniqueId] = (session.reserve[player.uniqueId] ?: 0) + 50
-                give(player, ItemStack(Material.OMINOUS_BOTTLE))
-            }
+            "trial_vault" -> give(player, ItemStack(Material.OMINOUS_BOTTLE))
             "trial_ominous" -> give(player, ItemStack(Material.GOLDEN_APPLE, 3))
             "heavy_core" -> give(player, ItemStack(Material.BREEZE_ROD, 10))
             "ancient_enter" -> {
@@ -310,6 +300,7 @@ class Progress(private val plugin: Manhunt) {
             "best_miner" -> give(player, ItemStack(Material.OBSIDIAN, 4), ItemStack(Material.GOLDEN_APPLE, 2))
         }
         if (shared) return
+        medicines(id)
         when (id) {
             "stronghold" -> {
                 session.wallEye = true
@@ -329,6 +320,18 @@ class Progress(private val plugin: Manhunt) {
                 session.netherUnlocked = true
             }
             "best_miner" -> session.netherUnlocked = true
+        }
+    }
+
+    private fun medicines(id: String) {
+        val count = when (id) {
+            "bastion", "fortress", "blaze", "stronghold", "route_mineshaft", "best_miner" -> 1
+            "route_trial", "route_ancient", "trial_vault" -> 2
+            else -> return
+        }
+        val overflow = plugin.session.grantMedicines(count)
+        if (overflow > 0) {
+            Bukkit.broadcast(Component.text("金疮药超过逃生人数，每人恢复备用血量 ${25 * overflow}。").color(NamedTextColor.GOLD))
         }
     }
 
@@ -632,33 +635,33 @@ class Progress(private val plugin: Manhunt) {
         val nodes = listOf(
             node("start", "minecraft:story/root", "游戏开始", "游戏开始\n奖励：指向最近村庄的指南针", "minecraft:compass"),
             node("vitality", "manhunt:start", "生机", "抵达初始结构\n奖励：铁锭×3、面包×5", "minecraft:iron_ingot"),
-            node("iron_pick", "manhunt:vitality", "这不是铁镐么？", "获得铁镐\n奖励：铜护腿、铜靴子", "minecraft:iron_pickaxe"),
-            node("water", "manhunt:iron_pick", "生命之源", "获得水桶\n奖励：铜头盔、铜胸甲", "minecraft:water_bucket"),
-            node("nether", "manhunt:water", "勇往直下", "进入地狱\n奖励：堡垒遗迹指南针、永久伤害吸收 V、备用血×60", "minecraft:netherrack"),
-            node("bastion", "manhunt:nether", "光辉岁月", "进入堡垒遗迹\n奖励：金头盔×1、铁锭×2、最大生命值+2、备用血×40", "minecraft:golden_helmet"),
+            node("iron_pick", "manhunt:vitality", "这不是铁镐么？", "获得铁镐\n奖励：铜护腿、铜靴子、面包×5", "minecraft:iron_pickaxe"),
+            node("water", "manhunt:iron_pick", "生命之源", "获得水桶\n奖励：铜头盔、铜胸甲、面包×5", "minecraft:water_bucket"),
+            node("nether", "manhunt:water", "勇往直下", "进入地狱\n奖励：堡垒遗迹指南针、永久伤害吸收 V、备用血×100、面包×5", "minecraft:netherrack"),
+            node("bastion", "manhunt:nether", "光辉岁月", "进入堡垒遗迹\n奖励：金头盔×1、铁锭×2、最大生命值+2、金疮药×1、面包×5", "minecraft:golden_helmet"),
             node("pearls", "manhunt:bastion", "阳光养猪场 I", "获得 12 个末影珍珠\n奖励：下界要塞指南针", "minecraft:ender_pearl"),
             node("obsidian", "manhunt:pearls", "阳光养猪场 II", "获得 20 个黑曜石\n奖励：铁靴子、8 分钟喷溅抗火药水", "minecraft:obsidian"),
-            node("fortress", "manhunt:obsidian", "阴森的要塞", "进入下界要塞\n奖励：备用血×60", "minecraft:blaze_rod"),
-            node("blaze", "manhunt:fortress", "烈焰升腾", "获得 6 个烈焰棒\n奖励：钻石×2、书×1、备用血×40", "minecraft:blaze_powder"),
-            node("return_overworld", "manhunt:blaze", "我从地狱里回来了", "携带 12 个末影之眼返回主世界\n奖励：铁锭×10、钻石×4、要塞指南针、20 级附魔台结果的附魔书", "minecraft:ender_eye"),
-            node("stronghold", "manhunt:return_overworld", "隔墙有眼", "进入末地要塞\n奖励：2000 经验，猎人也获得", "minecraft:ender_eye"),
+            node("fortress", "manhunt:obsidian", "阴森的要塞", "进入下界要塞\n奖励：金疮药×1", "minecraft:blaze_rod"),
+            node("blaze", "manhunt:fortress", "烈焰升腾", "获得 6 个烈焰棒\n奖励：钻石×2、书×1、金疮药×1", "minecraft:blaze_powder"),
+            node("return_overworld", "manhunt:blaze", "我从地狱里回来了", "携带 12 个末影之眼返回主世界\n奖励：铁锭×10、钻石×4、要塞指南针、20 级附魔台结果的附魔书、备用血×100", "minecraft:ender_eye"),
+            node("stronghold", "manhunt:return_overworld", "隔墙有眼", "进入末地要塞\n奖励：2000 经验，猎人也获得；金疮药×1", "minecraft:ender_eye"),
             node("enter_end", "manhunt:stronghold", "末路决战", "进入末地\n奖励：每人钻石×8、备用血×100", "minecraft:end_stone"),
-            node("full_iron", "manhunt:start", "整装待发", "获得全套铁盔甲\n奖励：铁锭×7、蜘蛛网×4", "minecraft:iron_chestplate"),
+            node("full_iron", "manhunt:start", "整装待发", "护甲值达到 15\n奖励：铁锭×7、蜘蛛网×4、面包×5", "minecraft:iron_chestplate"),
             node("route_nether", "manhunt:full_iron", "前往地狱", "继续主线速通\n奖励：每人耐久 I 金镐×1", "minecraft:golden_pickaxe"),
-            node("route_trial", "manhunt:full_iron", "前往试炼密室", "前往试炼\n奖励：每人试炼密室指南针、备用血×50", "minecraft:trial_key"),
-            node("route_ancient", "manhunt:full_iron", "前往古代城市", "追求宝藏和高级附魔\n奖励：每人古城指南针、速度 I（2 分钟）", "minecraft:sculk"),
-            node("route_mineshaft", "manhunt:full_iron", "前往矿井", "争取获得大量钻石\n奖励：每人废弃矿井指南针、钻石×2、备用血×20", "minecraft:rail"),
+            node("route_trial", "manhunt:full_iron", "前往试炼密室", "前往试炼\n奖励：每人试炼密室指南针、金疮药×2、桃木剑", "minecraft:trial_key"),
+            node("route_ancient", "manhunt:full_iron", "前往古代城市", "追求宝藏和高级附魔\n奖励：每人古城指南针、速度 I（2 分钟）、金疮药×2", "minecraft:sculk"),
+            node("route_mineshaft", "manhunt:full_iron", "前往矿井", "争取获得大量钻石\n奖励：每人废弃矿井指南针、钻石×2、金疮药×1", "minecraft:rail"),
             node("bread", "manhunt:start", "饱腹感", "拥有 32 个面包\n奖励：苹果×4", "minecraft:bread"),
             node("feast", "manhunt:start", "烧烤大餐", "拥有 32 个猪排或牛排\n奖励：金锭×4、铁锭×3", "minecraft:cooked_beef"),
             node("miner", "manhunt:start", "小矿工", "拥有 5 个粗铁\n奖励：高速熔炉", "minecraft:blast_furnace"),
-            node("old_miner", "manhunt:start", "老矿工", "拥有 20 个粗铁\n奖励：高炉×1、煤炭×8", "minecraft:blast_furnace"),
-            node("got_diamond", "manhunt:start", "钻石！", "获得钻石\n奖励：铁锭×5、备用血×10", "minecraft:diamond"),
-            node("gold_miner", "manhunt:start", "黄金矿工", "获得 30 个粗金\n奖励：高炉×1、煤炭块×2、金苹果×1", "minecraft:raw_gold"),
+            node("old_miner", "manhunt:start", "老矿工", "拥有 20 个粗铁\n奖励：高炉×1、煤炭×8、面包×5", "minecraft:blast_furnace"),
+            node("got_diamond", "manhunt:start", "钻石！", "获得钻石\n奖励：铁锭×5、面包×5", "minecraft:diamond"),
+            node("gold_miner", "manhunt:start", "黄金矿工", "获得 30 个粗金\n奖励：高炉×1、煤炭块×2、金苹果×1、面包×5", "minecraft:raw_gold"),
             node("crossbow", "manhunt:start", "枪枪爆头好运连连", "获得一把弩\n奖励：箭×5、长效缓慢箭×2", "minecraft:crossbow"),
             node("buckets", "manhunt:start", "水泵运转中", "获得 5 个空桶\n奖励：岩浆桶×1、蜘蛛网×8", "minecraft:bucket"),
             node("efficiency", "manhunt:start", "高效", "获得钻石镐\n奖励：效率 I 附魔书", "minecraft:diamond_pickaxe"),
             node("trial_enter", "manhunt:route_trial", "Minecraft 试炼版", "进入试炼密室\n奖励：牛排×10、风弹×4", "minecraft:trial_spawner"),
-            node("trial_vault", "manhunt:trial_enter", "珍藏密敛", "开启普通宝库\n奖励：备用血×50、不祥之瓶×1", "minecraft:vault"),
+            node("trial_vault", "manhunt:trial_enter", "珍藏密敛", "开启普通宝库\n奖励：不祥之瓶×1、金疮药×2", "minecraft:vault"),
             node("trial_ominous", "manhunt:trial_vault", "饱经磨砺", "开启不祥宝库\n奖励：金苹果×3，解除地狱封锁", "minecraft:ominous_bottle"),
             node("heavy_core", "manhunt:trial_ominous", "沉重之梦", "获得沉重核心\n奖励：旋风棒×10，猎人图腾×1", "minecraft:heavy_core"),
             node("ancient_enter", "manhunt:route_ancient", "静谧之地", "进入古城\n奖励：所有人迅捷潜行 II 铜护腿、夜视（4 分钟）", "minecraft:sculk_sensor"),
@@ -666,7 +669,7 @@ class Progress(private val plugin: Manhunt) {
             node("leggings", "manhunt:gapple", "AAA 裤头批发", "获得三件钻石护腿\n奖励：附魔台", "minecraft:diamond_leggings"),
             node("quiet_ench", "manhunt:leggings", "静谧魔咒", "成为附魔师\n奖励：青金石×20、2000 经验，猎人也获得经验", "minecraft:enchanting_table"),
             node("mineshaft_enter", "manhunt:route_mineshaft", "废弃之地", "进入废弃矿井\n奖励：剪刀、时运 I 附魔书、铁砧", "minecraft:rail"),
-            node("best_miner", "manhunt:mineshaft_enter", "最佳矿工", "获得 64 颗钻石\n奖励：黑曜石×4、金苹果×2，解除地狱封锁", "minecraft:diamond_block")
+            node("best_miner", "manhunt:mineshaft_enter", "最佳矿工", "获得 64 颗钻石\n奖励：黑曜石×4、金苹果×2、金疮药×1，解除地狱封锁", "minecraft:diamond_block")
         )
         for ((id, json) in nodes) File(dir, "$id.json").writeText(json, Charsets.UTF_8)
     }

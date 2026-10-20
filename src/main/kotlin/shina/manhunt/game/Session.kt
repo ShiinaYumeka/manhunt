@@ -7,11 +7,12 @@ import org.bukkit.entity.Player
 import org.bukkit.inventory.Inventory
 import org.bukkit.inventory.InventoryHolder
 import shina.manhunt.Manhunt
+import shina.manhunt.kit.Gear
 import java.util.UUID
 
 enum class Phase { LOBBY, COUNTDOWN, PLAYING, ENDED }
 
-enum class Role { HUNTER, RUNNER }
+enum class Role { HUNTER, RUNNER, SPECTATOR }
 
 enum class Rule(val id: String, val label: String) {
     HUNT("hunt", "狩猎诅咒"),
@@ -29,6 +30,14 @@ enum class Route(val advancement: String) {
     TRIAL("route_trial"),
     ANCIENT("route_ancient"),
     MINESHAFT("route_mineshaft")
+}
+
+class RunnerChestHolder : InventoryHolder {
+    private lateinit var backing: Inventory
+    fun bind(inventory: Inventory) {
+        backing = inventory
+    }
+    override fun getInventory(): Inventory = backing
 }
 
 class TeamChestHolder : InventoryHolder {
@@ -67,15 +76,19 @@ class StructureMark(
 
 class Session(val plugin: Manhunt) {
     var phase = Phase.LOBBY
-    var respawnSeconds = 35
-    var reserveMax = 400
+    var respawnSeconds = 30
+    var reserveMax = 300
+    var respawnLocked = false
+    var reserveLocked = false
+    var medicines = 0
+    val healingUntil = mutableMapOf<UUID, Long>()
+    val reserveInitial = mutableMapOf<UUID, Int>()
     val roles = mutableMapOf<UUID, Role>()
     val reserve = mutableMapOf<UUID, Int>()
     val eliminated = mutableSetOf<UUID>()
     val downed = mutableSetOf<UUID>()
     val downedAt = mutableMapOf<UUID, Long>()
     val rescue = mutableMapOf<UUID, Pair<UUID, Long>>()
-    val giveUpSince = mutableMapOf<UUID, Long>()
     var rallyUsed = false
     var startedAt = 0L
     var early = false
@@ -113,6 +126,8 @@ class Session(val plugin: Manhunt) {
     var xpBank = 0
     val chestHolder = TeamChestHolder()
     lateinit var chest: Inventory
+    val runnerChestHolder = RunnerChestHolder()
+    lateinit var runnerChest: Inventory
 
     fun noteSpot(player: Player) {
         currentSpot[player.uniqueId] = player.location.clone()
@@ -123,7 +138,41 @@ class Session(val plugin: Manhunt) {
 
     fun role(id: UUID): Role? = roles[id]
 
+    fun adaptBalance(atStart: Boolean): String? {
+        if (respawnLocked && reserveLocked) return null
+        val hunters = Bukkit.getOnlinePlayers().count { role(it.uniqueId) == Role.HUNTER }
+        val runners = Bukkit.getOnlinePlayers().count { role(it.uniqueId) == Role.RUNNER }
+        if (!respawnLocked) {
+            respawnSeconds = (30 + 5 * (hunters - 4) + 5 * (hunters - runners)).coerceAtLeast(1)
+        }
+        if (!reserveLocked) {
+            reserveMax = (300 + 30 * (hunters - runners)).coerceAtLeast(1)
+        }
+        val title = if (atStart) "开局设置" else "自动设置"
+        val respawnMark = if (respawnLocked) "（手动）" else ""
+        val reserveMark = if (reserveLocked) "（手动）" else ""
+        return "$title：猎人 $hunters，逃生 $runners。复活时间 $respawnSeconds 秒$respawnMark，备用血量 $reserveMax$reserveMark。"
+    }
+
     fun livingIds(): Set<UUID> = roles.filter { it.value == Role.RUNNER && it.key !in eliminated }.keys
+
+    fun restoreReserve(id: UUID, amount: Int) {
+        if (amount <= 0) return
+        val current = reserve[id] ?: 0
+        val cap = reserveInitial[id] ?: current
+        reserve[id] = (current + amount).coerceAtMost(maxOf(cap, current))
+    }
+
+    fun grantMedicines(count: Int): Int {
+        if (count <= 0) return 0
+        val room = (livingIds().size - medicines).coerceAtLeast(0)
+        val added = minOf(count, room)
+        val overflow = count - added
+        medicines += added
+        if (::runnerChest.isInitialized) Gear.placeMedicines(runnerChest, medicines)
+        if (overflow > 0) livingIds().forEach { restoreReserve(it, 25 * overflow) }
+        return overflow
+    }
 
     fun livingRunners(): List<Player> = livingIds().mapNotNull { Bukkit.getPlayer(it) }
 

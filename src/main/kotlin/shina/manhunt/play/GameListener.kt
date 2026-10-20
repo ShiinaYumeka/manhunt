@@ -2,11 +2,14 @@ package shina.manhunt.play
 
 import org.bukkit.event.entity.PiglinBarterEvent
 import org.bukkit.GameMode
+import org.bukkit.Location
 import org.bukkit.Material
 import org.bukkit.World
 import org.bukkit.block.Block
 import org.bukkit.block.BlockFace
 import org.bukkit.attribute.Attribute
+import org.bukkit.attribute.AttributeModifier
+import org.bukkit.entity.Monster
 import org.bukkit.entity.Player
 import org.bukkit.entity.Projectile
 import org.bukkit.entity.TNTPrimed
@@ -21,14 +24,19 @@ import org.bukkit.event.block.BlockBreakEvent
 import org.bukkit.event.block.BlockDropItemEvent
 import org.bukkit.event.block.BlockExplodeEvent
 import org.bukkit.event.block.BlockPlaceEvent
+import org.bukkit.event.block.CrafterCraftEvent
 import org.bukkit.event.entity.CreatureSpawnEvent
 import org.bukkit.event.entity.EntityDamageByEntityEvent
+import org.bukkit.event.entity.EntityTargetLivingEntityEvent
 import org.bukkit.event.entity.EntityExplodeEvent
+import org.bukkit.damage.DamageType
 import org.bukkit.event.entity.EntityDamageEvent
 import org.bukkit.event.entity.EntityRegainHealthEvent
 import org.bukkit.event.entity.PlayerDeathEvent
 import org.bukkit.event.inventory.ClickType
+import org.bukkit.event.inventory.CraftItemEvent
 import org.bukkit.event.inventory.FurnaceStartSmeltEvent
+import org.bukkit.event.inventory.PrepareItemCraftEvent
 import org.bukkit.event.inventory.InventoryClickEvent
 import org.bukkit.event.inventory.InventoryDragEvent
 import org.bukkit.event.inventory.InventoryOpenEvent
@@ -56,6 +64,7 @@ import shina.manhunt.Manhunt
 import shina.manhunt.game.Match
 import shina.manhunt.game.Phase
 import shina.manhunt.game.Role
+import shina.manhunt.game.RunnerChestHolder
 import shina.manhunt.game.TeamChestHolder
 import shina.manhunt.kit.Gear
 import java.util.UUID
@@ -63,9 +72,19 @@ import kotlin.math.ceil
 
 class GameListener(private val plugin: Manhunt) : Listener {
     private val fireBlessingReady = mutableMapOf<UUID, Long>()
+    private val bedBlasts = mutableListOf<Pair<Location, Long>>()
+
+    init {
+        plugin.server.scheduler.runTaskTimer(plugin, Runnable { tuneStrength() }, 1L, 1L)
+    }
     @EventHandler
     fun onJoin(event: PlayerJoinEvent) {
-        if (plugin.session.phase == Phase.LOBBY) Match.joinMessage(event.player)
+        val session = plugin.session
+        if (session.phase == Phase.LOBBY) Match.joinMessage(event.player)
+        else if (session.role(event.player.uniqueId) == null) event.player.sendMessage("使用 /manhunt join spectator 加入旁观。")
+        if (session.phase != Phase.LOBBY && session.role(event.player.uniqueId) == Role.SPECTATOR) {
+            event.player.gameMode = GameMode.SPECTATOR
+        }
         plugin.ticker.syncBoard()
         plugin.ticker.refreshGlowSoon()
     }
@@ -76,7 +95,7 @@ class GameListener(private val plugin: Manhunt) : Listener {
         val from = event.from
         if (from.blockX == to.blockX && from.blockY == to.blockY && from.blockZ == to.blockZ) return
         val session = plugin.session
-        if (session.phase == Phase.COUNTDOWN || event.player.uniqueId in session.downed) {
+        if (session.phase == Phase.COUNTDOWN || event.player.uniqueId in session.downed || event.player.uniqueId in session.healingUntil) {
             event.isCancelled = true
             return
         }
@@ -84,6 +103,59 @@ class GameListener(private val plugin: Manhunt) : Listener {
             to.x = from.x
             to.y = from.y
             to.z = from.z
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onBedClick(event: PlayerInteractEvent) {
+        if (event.action != Action.RIGHT_CLICK_BLOCK) return
+        if (event.useInteractedBlock() == Event.Result.DENY) return
+        val block = event.clickedBlock ?: return
+        if (!block.type.name.endsWith("_BED")) return
+        val env = block.world.environment
+        if (env != World.Environment.NETHER && env != World.Environment.THE_END) return
+        val now = System.currentTimeMillis()
+        bedBlasts.removeIf { now - it.second > 1000 }
+        bedBlasts += block.location.clone().add(0.5, 0.5, 0.5) to now
+    }
+
+    private fun bedBlastHurts(player: Player, event: EntityDamageEvent): Boolean {
+        if (event.cause != EntityDamageEvent.DamageCause.BLOCK_EXPLOSION) return false
+        if (event.damageSource.damageType != DamageType.BAD_RESPAWN_POINT) return false
+        val now = System.currentTimeMillis()
+        bedBlasts.removeIf { now - it.second > 1000 }
+        val origin = event.damageSource.damageLocation
+        return bedBlasts.any { (center, _) ->
+            if (center.world != player.world) return@any false
+            val spot = origin ?: player.location
+            if (spot.world != null && spot.world != center.world) return@any false
+            val dx = center.x - spot.x
+            val dy = center.y - spot.y
+            val dz = center.z - spot.z
+            dx * dx + dy * dy + dz * dz <= if (origin != null) 0.25 else 100.0
+        }
+    }
+
+    private var strengthMisses = 0
+
+    private fun tuneStrength() {
+        for (player in plugin.server.onlinePlayers) {
+            val effect = player.getPotionEffect(PotionEffectType.STRENGTH) ?: continue
+            val attribute = player.getAttribute(Attribute.ATTACK_DAMAGE) ?: continue
+            val want = (effect.amplifier + 1).toDouble()
+            val current = attribute.modifiers.firstOrNull { it.key.key == "effect.strength" }
+            if (current == null) {
+                strengthMisses++
+                if (strengthMisses == 40) {
+                    val keys = attribute.modifiers.joinToString { it.key.toString() }
+                    plugin.logger.warning("没能改写力量的攻击加成，当前修饰符：$keys")
+                }
+                continue
+            }
+            strengthMisses = 0
+            if (current.amount == want) continue
+            attribute.removeModifier(current.key)
+            attribute.addTransientModifier(AttributeModifier(current.key, want, current.operation, current.slotGroup))
         }
     }
 
@@ -100,6 +172,10 @@ class GameListener(private val plugin: Manhunt) : Listener {
     @EventHandler
     fun onDamage(event: EntityDamageEvent) {
         val player = event.entity as? Player ?: return
+        if (bedBlastHurts(player, event)) {
+            event.isCancelled = true
+            return
+        }
         val session = plugin.session
         if (session.phase == Phase.COUNTDOWN) {
             event.isCancelled = true
@@ -142,7 +218,7 @@ class GameListener(private val plugin: Manhunt) : Listener {
     fun onHit(event: EntityDamageByEntityEvent) {
         val session = plugin.session
         val attacker = attacker(event)
-        if (attacker != null && attacker.uniqueId in session.downed) {
+        if (attacker != null && (attacker.uniqueId in session.downed || attacker.uniqueId in session.healingUntil)) {
             event.isCancelled = true
             return
         }
@@ -181,7 +257,7 @@ class GameListener(private val plugin: Manhunt) : Listener {
 
     @EventHandler
     fun onPlace(event: BlockPlaceEvent) {
-        if (event.player.uniqueId in plugin.session.downed) {
+        if (event.player.uniqueId in plugin.session.downed || event.player.uniqueId in plugin.session.healingUntil) {
             event.isCancelled = true
             return
         }
@@ -192,6 +268,10 @@ class GameListener(private val plugin: Manhunt) : Listener {
 
     @EventHandler
     fun onBreak(event: BlockBreakEvent) {
+        if (event.player.uniqueId in plugin.session.healingUntil) {
+            event.isCancelled = true
+            return
+        }
         if (event.block.type == Material.SPAWNER) {
             event.isCancelled = true
             return
@@ -280,6 +360,10 @@ class GameListener(private val plugin: Manhunt) : Listener {
             plugin.hunterLoop.confirm(player)
             return
         }
+        if (player.uniqueId in plugin.session.healingUntil) {
+            event.isCancelled = true
+            return
+        }
         val item = event.item ?: return
         if (Gear.isRally(item)) {
             event.isCancelled = true
@@ -302,6 +386,11 @@ class GameListener(private val plugin: Manhunt) : Listener {
         if (Gear.isTeamChest(item)) {
             event.isCancelled = true
             plugin.hunterLoop.openChest(player)
+            return
+        }
+        if (Gear.isRunnerChest(item)) {
+            event.isCancelled = true
+            plugin.ticker.openRunnerChest(player)
             return
         }
         if (trackingCompass(item)) {
@@ -380,6 +469,22 @@ class GameListener(private val plugin: Manhunt) : Listener {
     }
 
     @EventHandler
+    fun onPrepareHopper(event: PrepareItemCraftEvent) {
+        if (event.inventory.result?.type != Material.HOPPER) return
+        event.inventory.result = null
+    }
+
+    @EventHandler
+    fun onCraftHopper(event: CraftItemEvent) {
+        if (event.recipe.result.type == Material.HOPPER) event.isCancelled = true
+    }
+
+    @EventHandler
+    fun onCrafterHopper(event: CrafterCraftEvent) {
+        if (event.result.type == Material.HOPPER) event.isCancelled = true
+    }
+
+    @EventHandler
     fun onDrop(event: PlayerDropItemEvent) {
         if (Gear.isHunterCompass(event.itemDrop.itemStack)) event.isCancelled = true
     }
@@ -408,7 +513,7 @@ class GameListener(private val plugin: Manhunt) : Listener {
                 event.drops.clear()
                 Match.eliminate(plugin, player)
             }
-            null -> Unit
+            Role.SPECTATOR, null -> Unit
         }
     }
 
@@ -479,6 +584,40 @@ class GameListener(private val plugin: Manhunt) : Listener {
     }
 
     @EventHandler
+    fun onRunnerChestClick(event: InventoryClickEvent) {
+        val top = event.view.topInventory
+        if (top.holder !is RunnerChestHolder) return
+        val onMedicine = event.rawSlot == Gear.XP_SLOT || Gear.isMedicine(event.currentItem)
+        if (event.click.isShiftClick && event.clickedInventory != top) {
+            val player = event.whoClicked as? Player ?: return
+            plugin.server.scheduler.runTask(plugin, Runnable { restoreMedicine(top, player) })
+            return
+        }
+        if (!onMedicine && !Gear.isMedicine(event.cursor)) return
+        event.isCancelled = true
+        if (!onMedicine) return
+        val player = event.whoClicked as? Player ?: return
+        if (event.click == ClickType.LEFT) plugin.ticker.useMedicine(player)
+        else player.sendActionBar(net.kyori.adventure.text.Component.text("左键使用金疮药"))
+    }
+
+    @EventHandler
+    fun onRunnerChestDrag(event: InventoryDragEvent) {
+        if (event.view.topInventory.holder !is RunnerChestHolder) return
+        if (event.rawSlots.any { it == Gear.XP_SLOT } || Gear.isMedicine(event.oldCursor)) event.isCancelled = true
+    }
+
+    private fun restoreMedicine(top: org.bukkit.inventory.Inventory, player: Player) {
+        val current = top.getItem(Gear.XP_SLOT)
+        if (Gear.isMedicine(current)) return
+        if (current != null && current.type != Material.AIR) {
+            val left = player.inventory.addItem(current)
+            left.values.forEach { player.world.dropItem(player.location, it) }
+        }
+        Gear.placeMedicines(top, plugin.session.medicines)
+    }
+
+    @EventHandler
     fun onAdvancement(event: PlayerAdvancementDoneEvent) {
         plugin.progress.onAdvancement(event)
     }
@@ -522,6 +661,19 @@ class GameListener(private val plugin: Manhunt) : Listener {
     }
 
     @EventHandler
+    fun onMonsterTarget(event: EntityTargetLivingEntityEvent) {
+        if (event.entity !is Monster) return
+        val player = event.target as? Player ?: return
+        if (player.uniqueId !in plugin.session.downed) return
+        event.isCancelled = true
+        val monster = event.entity as Monster
+        plugin.server.scheduler.runTask(plugin, Runnable {
+            if (monster.target?.uniqueId == player.uniqueId) monster.target = null
+            if (monster is Warden) monster.clearAnger(player)
+        })
+    }
+
+    @EventHandler
     fun onWarden(event: CreatureSpawnEvent) {
         val warden = event.entity as? Warden ?: return
         if (event.spawnReason != CreatureSpawnEvent.SpawnReason.NATURAL) return
@@ -545,13 +697,15 @@ class GameListener(private val plugin: Manhunt) : Listener {
         val session = plugin.session
         if (session.phase != Phase.PLAYING) return
         val victim = event.entity as? Player ?: return
-        if (session.role(victim.uniqueId) == null) return
+        val victimRole = session.role(victim.uniqueId)
+        if (victimRole != Role.HUNTER && victimRole != Role.RUNNER) return
         val amount = event.finalDamage
         if (amount <= 0.0) return
         session.damageTaken[victim.uniqueId] = (session.damageTaken[victim.uniqueId] ?: 0.0) + amount
         if (event is EntityDamageByEntityEvent) {
             val attacker = attacker(event)
-            if (attacker != null && attacker != victim && session.role(attacker.uniqueId) != null) {
+            val attackerRole = attacker?.let { session.role(it.uniqueId) }
+            if (attacker != null && attacker != victim && (attackerRole == Role.HUNTER || attackerRole == Role.RUNNER)) {
                 session.damageDealt[attacker.uniqueId] = (session.damageDealt[attacker.uniqueId] ?: 0.0) + amount
             }
         }

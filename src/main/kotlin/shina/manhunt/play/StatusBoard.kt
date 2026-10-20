@@ -95,6 +95,7 @@ class StatusBoard(private val plugin: Manhunt) {
             when (role) {
                 Role.RUNNER -> runnerTeam.addEntry(name)
                 Role.HUNTER -> hunterTeam.addEntry(name)
+                Role.SPECTATOR -> Unit
             }
         }
     }

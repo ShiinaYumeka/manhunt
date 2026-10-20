@@ -23,6 +23,7 @@ class Manhunt : JavaPlugin() {
         hunterLoop = HunterLoop(this)
         ticker = Ticker(this)
         progress.install()
+        shina.manhunt.play.TrialCap.start(this)
         server.scheduler.runTask(this, Runnable {
             shina.manhunt.game.Match.preloadHut(this)
             server.worlds.forEach { shina.manhunt.game.Match.ensureHut(this, it) }

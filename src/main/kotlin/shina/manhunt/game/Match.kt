@@ -54,6 +54,7 @@ object Match {
             Bukkit.broadcast(Component.text("至少需要一名猎人和一名逃生。").color(NamedTextColor.RED))
             return
         }
+        session.adaptBalance(true)?.let { Bukkit.broadcast(Component.text(it).color(NamedTextColor.YELLOW)) }
         session.phase = Phase.COUNTDOWN
         val world = Bukkit.getWorlds().first { it.environment == World.Environment.NORMAL }
         Bukkit.getWorlds().forEach {
@@ -67,6 +68,8 @@ object Match {
         session.chest = Bukkit.createInventory(session.chestHolder, 54, Component.text("团队仓库"))
         session.chestHolder.bind(session.chest)
         Gear.placeXpButtons(session.chest, session.xpBank)
+        session.runnerChest = Bukkit.createInventory(session.runnerChestHolder, 54, Component.text("逃生仓库"))
+        session.runnerChestHolder.bind(session.runnerChest)
         for (player in Bukkit.getOnlinePlayers()) {
             player.inventory.clear()
             player.absorptionAmount = 0.0
@@ -78,11 +81,19 @@ object Match {
                     player.foodLevel = 20
                     player.saturation = 5f
                     session.reserve[player.uniqueId] = session.reserveMax
+                    session.reserveInitial[player.uniqueId] = session.reserveMax
                     player.setRespawnLocation(hut, true)
                 }
                 Role.HUNTER -> player.gameMode = GameMode.SPECTATOR
-                null -> player.gameMode = GameMode.SPECTATOR
+                Role.SPECTATOR, null -> {
+                    session.roles[player.uniqueId] = Role.SPECTATOR
+                    player.gameMode = GameMode.SPECTATOR
+                }
             }
+        }
+        val overflow = session.grantMedicines(2)
+        if (overflow > 0) {
+            Bukkit.broadcast(Component.text("金疮药超过逃生人数，每人恢复备用血量 ${25 * overflow}。").color(NamedTextColor.GOLD))
         }
         var left = 5
         Bukkit.getScheduler().runTaskTimer(plugin, { task ->
@@ -108,6 +119,7 @@ object Match {
             player.addPotionEffect(PotionEffect(PotionEffectType.RESISTANCE, 30 * 60 * 20, 0, false, true, true))
             player.inventory.addItem(Gear.runnerCompass())
             player.inventory.addItem(Gear.rallyItem())
+            player.inventory.addItem(Gear.runnerChest())
             plugin.progress.award(player, "start")
         }
         for (hunter in session.hunters()) {
@@ -119,6 +131,7 @@ object Match {
         }, 5 * 60 * 20L)
         plugin.ticker.refreshGlowSoon()
         Bukkit.broadcast(Component.text("游戏开始。").color(NamedTextColor.GREEN))
+        if (session.livingIds().isEmpty()) huntersWin(plugin)
     }
 
     private fun warmVillageCompasses(plugin: Manhunt) {
@@ -144,7 +157,6 @@ object Match {
         if (!session.eliminated.add(player.uniqueId)) return
         session.downed.remove(player.uniqueId)
         session.downedAt.remove(player.uniqueId)
-        session.giveUpSince.remove(player.uniqueId)
         val rescuers = session.rescue.filterValues { it.first == player.uniqueId }.keys.toList()
         session.rescue.entries.removeIf { it.key == player.uniqueId || it.value.first == player.uniqueId }
         for (id in rescuers) {
@@ -204,7 +216,11 @@ object Match {
             Triple(role, name, (session.damageDealt[id] ?: 0.0) to (session.damageTaken[id] ?: 0.0))
         }.sortedByDescending { it.third.first }
         for ((role, name, pair) in rows) {
-            val side = if (role == Role.HUNTER) "猎人" else "逃生"
+            val side = when (role) {
+                Role.HUNTER -> "猎人"
+                Role.RUNNER -> "逃生"
+                Role.SPECTATOR -> continue
+            }
             val dealt = String.format("%.1f", pair.first)
             val taken = String.format("%.1f", pair.second)
             Bukkit.broadcast(Component.text("$side $name  造成 $dealt  承受 $taken"))

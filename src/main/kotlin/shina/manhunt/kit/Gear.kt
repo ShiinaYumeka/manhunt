@@ -38,6 +38,8 @@ object Gear {
     private val runnerCompass get() = NamespacedKey(Manhunt.instance, "runner_compass")
     private val compassKindKey get() = NamespacedKey(Manhunt.instance, "compass_kind")
     private val chestKey get() = NamespacedKey(Manhunt.instance, "team_chest")
+    private val runnerChestKey get() = NamespacedKey(Manhunt.instance, "runner_chest")
+    private val medicineKey get() = NamespacedKey(Manhunt.instance, "medicine")
     private val giftKey get() = NamespacedKey(Manhunt.instance, "gift")
     private val rallyKey get() = NamespacedKey(Manhunt.instance, "rally")
     private val furnaceKey get() = NamespacedKey(Manhunt.instance, "fast_furnace")
@@ -52,6 +54,8 @@ object Gear {
     fun isRunnerCompass(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(runnerCompass, PersistentDataType.BYTE) == true
     fun compassKind(item: ItemStack?): String? = item?.itemMeta?.persistentDataContainer?.get(compassKindKey, PersistentDataType.STRING)
     fun isTeamChest(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(chestKey, PersistentDataType.BYTE) == true
+    fun isRunnerChest(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(runnerChestKey, PersistentDataType.BYTE) == true
+    fun isMedicine(item: ItemStack?): Boolean = item?.itemMeta?.persistentDataContainer?.has(medicineKey, PersistentDataType.BYTE) == true
     fun isGift(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(giftKey, PersistentDataType.STRING) == true
     fun isRally(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(rallyKey, PersistentDataType.BYTE) == true
     fun isFastFurnace(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(furnaceKey, PersistentDataType.BYTE) == true
@@ -65,6 +69,24 @@ object Gear {
     fun placeXpButtons(inventory: org.bukkit.inventory.Inventory, bank: Int) {
         if (isXpButton(inventory.getItem(XP_OLD_SLOT))) inventory.setItem(XP_OLD_SLOT, null)
         inventory.setItem(XP_SLOT, xpButton(bank))
+    }
+
+    fun placeMedicines(inventory: org.bukkit.inventory.Inventory, count: Int) {
+        inventory.setItem(XP_SLOT, medicine(count))
+    }
+
+    private fun medicine(count: Int): ItemStack {
+        val item = named(Material.HONEY_BOTTLE, "金疮药", NamedTextColor.GOLD)
+        val meta = item.itemMeta
+        meta.lore(listOf(
+            text("左键使用，一次一个", NamedTextColor.GRAY),
+            text("10 秒内无法行动", NamedTextColor.GRAY),
+            text("结束时恢复备用血量 100、生命 10", NamedTextColor.GRAY),
+            text("剩余：$count", NamedTextColor.WHITE)
+        ))
+        item.itemMeta = meta
+        mark(item, medicineKey)
+        return item
     }
 
     private fun xpButton(bank: Int): ItemStack {
@@ -98,6 +120,12 @@ object Gear {
     }
     fun runnerCompass(): ItemStack = structureCompass("village", "结构指南针")
     fun teamChest(): ItemStack = named(Material.CHEST, "团队仓库", NamedTextColor.GOLD).also { mark(it, chestKey) }
+    fun runnerChest(): ItemStack = named(Material.CHEST, "逃生仓库", NamedTextColor.GREEN).also {
+        val meta = it.itemMeta
+        meta.lore(listOf(text("附近 40 格内没有猎人时打开", NamedTextColor.GRAY)))
+        it.itemMeta = meta
+        mark(it, runnerChestKey)
+    }
     fun rallyItem(): ItemStack = named(Material.RECOVERY_COMPASS, "集结", NamedTextColor.AQUA).also {
         val meta = it.itemMeta
         meta.lore(listOf(text("全队只能使用一次", NamedTextColor.GRAY), text("右键后立刻把队友召到身边", NamedTextColor.GRAY)))
@@ -156,8 +184,6 @@ object Gear {
                 items += many(Material.COBBLESTONE, 20)
                 items += fixed(Material.STONE_AXE, 1)
                 items += fixed(Material.STONE_PICKAXE, 1)
-                items += fixed(Material.IRON_CHESTPLATE, 1)
-                items += fixed(Material.IRON_HELMET, 1)
                 items += fixed(Material.IRON_SWORD, 1)
                 items += many(Material.BREAD, 10)
                 items += fixed(Material.SHIELD, 1)
@@ -178,18 +204,37 @@ object Gear {
                 if (session.nether) items += gift("nether", "下界礼盒")
             }
         }
+        val ironAt = IntArray(4)
+        if (session.nether) {
+            ironAt[0] += 1
+            ironAt[2] += 1
+        }
         if (level >= 2 && session.armor15.isNotEmpty()) {
             val people = session.armor15.size
             items += many(Material.IRON_INGOT, people)
             items += many(Material.BREAD, 5 * people)
             items += many(Material.COOKED_BEEF, people)
             items += many(Material.OAK_LOG, 2 * people)
-            if (level != 3) {
-                ironOrder().take(people.coerceAtMost(4)).forEach { items += fixed(it, 1) }
-                val diamonds = (session.armor18.size - 1).coerceAtLeast(0).coerceAtMost(4)
-                diamondOrder().take(diamonds).forEach { items += fixed(it, 1) }
-            }
+            val ironPieces = people.coerceAtMost(4)
+            for (index in 0 until ironPieces) ironAt[index] += 1
         }
+        var diamonds = (session.armor18.size - 1).coerceAtLeast(0).coerceAtMost(4)
+        if ((session.heavyDream || session.wallEye) && diamonds < 2) diamonds = 2
+        var displaced = 0
+        for (index in 0 until diamonds) {
+            displaced += ironAt[index]
+            ironAt[index] = 0
+        }
+        var cursor = diamonds
+        while (displaced > 0 && cursor < ironAt.size) {
+            if (ironAt[cursor] == 0) {
+                ironAt[cursor] = 1
+                displaced--
+            }
+            cursor++
+        }
+        for (index in 0 until diamonds) items += fixed(diamondOrder()[index], 1)
+        for (index in ironAt.indices) repeat(ironAt[index]) { items += fixed(ironOrder()[index], 1) }
         if (session.heavyDream || session.wallEye) {
             val have = items.count { it.type in diamondArmor }
             repeat((2 - have).coerceAtLeast(0)) { index ->
@@ -237,6 +282,18 @@ object Gear {
         }
         val weapon = items.firstOrNull { it.type.name.endsWith("SWORD") } ?: items.firstOrNull { it.type.name.endsWith("_AXE") }
         weapon?.addUnsafeEnchantment(Enchantment.SHARPNESS, 2)
+    }
+
+    fun peachSword(): ItemStack {
+        val item = ItemStack(Material.WOODEN_SWORD)
+        val meta = item.itemMeta
+        meta.customName(text("桃木剑", NamedTextColor.GOLD))
+        meta.lore(listOf(text("无限耐久", NamedTextColor.GRAY)))
+        item.itemMeta = meta
+        item.addUnsafeEnchantment(Enchantment.SMITE, 5)
+        item.addUnsafeEnchantment(Enchantment.BANE_OF_ARTHROPODS, 5)
+        item.setData(DataComponentTypes.UNBREAKABLE)
+        return item
     }
 
     fun ritualAxe(): ItemStack {

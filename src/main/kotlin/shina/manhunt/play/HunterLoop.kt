@@ -265,7 +265,7 @@ class HunterLoop(private val plugin: Manhunt) {
     private fun invalidReason(hunter: Player): String? {
         val runners = plugin.session.livingRunners().filter { it.world == hunter.world }
         if (!plugin.session.early && hunter.location.y < 40) return "开局五分钟内不能在 Y 40 以下复活"
-        if (runners.none { it.location.distance(hunter.location) in 40.0..300.0 }) return "需要至少一名逃生在 40 到 300 格内"
+        if (runners.none { it.location.distance(hunter.location) in 40.0..200.0 }) return "需要至少一名逃生在 40 到 200 格内"
         if (runners.any { sees(it, hunter) }) return "你还在逃生的视线内"
         return null
     }
