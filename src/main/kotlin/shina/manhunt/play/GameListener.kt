@@ -390,7 +390,7 @@ class GameListener(private val plugin: Manhunt) : Listener {
         }
         if (Gear.isRunnerChest(item)) {
             event.isCancelled = true
-            plugin.ticker.openRunnerChest(player)
+            if (plugin.session.runnerChestEnabled) plugin.ticker.openRunnerChest(player)
             return
         }
         if (trackingCompass(item)) {
@@ -585,6 +585,7 @@ class GameListener(private val plugin: Manhunt) : Listener {
 
     @EventHandler
     fun onRunnerChestClick(event: InventoryClickEvent) {
+        if (!plugin.session.medicineEnabled) return
         val top = event.view.topInventory
         if (top.holder !is RunnerChestHolder) return
         val onMedicine = event.rawSlot == Gear.XP_SLOT || Gear.isMedicine(event.currentItem)
@@ -603,6 +604,7 @@ class GameListener(private val plugin: Manhunt) : Listener {
 
     @EventHandler
     fun onRunnerChestDrag(event: InventoryDragEvent) {
+        if (!plugin.session.medicineEnabled) return
         if (event.view.topInventory.holder !is RunnerChestHolder) return
         if (event.rawSlots.any { it == Gear.XP_SLOT } || Gear.isMedicine(event.oldCursor)) event.isCancelled = true
     }

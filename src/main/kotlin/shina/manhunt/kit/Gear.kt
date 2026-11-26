@@ -126,6 +126,18 @@ object Gear {
         it.itemMeta = meta
         mark(it, runnerChestKey)
     }
+    fun giveToBackpack(player: org.bukkit.entity.Player, item: ItemStack) {
+        val inventory = player.inventory
+        for (slot in 9..35) {
+            val current = inventory.getItem(slot)
+            if (current == null || current.type == Material.AIR) {
+                inventory.setItem(slot, item)
+                return
+            }
+        }
+        player.world.dropItem(player.location, item)
+    }
+
     fun rallyItem(): ItemStack = named(Material.RECOVERY_COMPASS, "集结", NamedTextColor.AQUA).also {
         val meta = it.itemMeta
         meta.lore(listOf(text("全队只能使用一次", NamedTextColor.GRAY), text("右键后立刻把队友召到身边", NamedTextColor.GRAY)))
@@ -155,7 +167,7 @@ object Gear {
     fun loadout(session: Session): List<ItemStack> {
         if (!session.early) return emptyList()
         val level = when {
-            session.heavyDream || session.wallEye || session.armor18.isNotEmpty() -> 4
+            session.wallEye || session.armor18.isNotEmpty() -> 4
             session.nether -> 3
             session.mid -> 2
             true -> 1
@@ -209,17 +221,19 @@ object Gear {
             ironAt[0] += 1
             ironAt[2] += 1
         }
-        if (level >= 2 && session.armor15.isNotEmpty()) {
+        if (session.heavyDream || (level >= 2 && session.armor15.isNotEmpty())) {
             val people = session.armor15.size
-            items += many(Material.IRON_INGOT, people)
-            items += many(Material.BREAD, 5 * people)
-            items += many(Material.COOKED_BEEF, people)
-            items += many(Material.OAK_LOG, 2 * people)
-            val ironPieces = people.coerceAtMost(4)
+            if (level >= 2 && people > 0) {
+                items += many(Material.IRON_INGOT, people)
+                items += many(Material.BREAD, 5 * people)
+                items += many(Material.COOKED_BEEF, people)
+                items += many(Material.OAK_LOG, 2 * people)
+            }
+            val ironPieces = if (session.heavyDream) 4 else people.coerceAtMost(4)
             for (index in 0 until ironPieces) ironAt[index] += 1
         }
         var diamonds = (session.armor18.size - 1).coerceAtLeast(0).coerceAtMost(4)
-        if ((session.heavyDream || session.wallEye) && diamonds < 2) diamonds = 2
+        if (session.wallEye && diamonds < 2) diamonds = 2
         var displaced = 0
         for (index in 0 until diamonds) {
             displaced += ironAt[index]
@@ -235,7 +249,7 @@ object Gear {
         }
         for (index in 0 until diamonds) items += fixed(diamondOrder()[index], 1)
         for (index in ironAt.indices) repeat(ironAt[index]) { items += fixed(ironOrder()[index], 1) }
-        if (session.heavyDream || session.wallEye) {
+        if (session.wallEye) {
             val have = items.count { it.type in diamondArmor }
             repeat((2 - have).coerceAtLeast(0)) { index ->
                 items += fixed(diamondOrder()[index.coerceAtMost(diamondOrder().lastIndex)], 1)

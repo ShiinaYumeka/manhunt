@@ -44,7 +44,12 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
             "xp" -> plugin.hunterLoop.xp(sender, args.getOrNull(1))
             "chest" -> plugin.hunterLoop.openChest(sender)
             "event" -> event(sender, args.getOrNull(1), args.getOrNull(2))
-            else -> sender.sendMessage("/manhunt join|leave|respawn|reserve|list|start|event|reset|role")
+            "option" -> option(sender, args.getOrNull(1), args.getOrNull(2))
+            "settings" -> {
+                if (session.phase != Phase.LOBBY) sender.sendMessage(Component.text("现在不能打开设置。").color(NamedTextColor.RED))
+                else SettingsMenu.open(sender)
+            }
+            else -> sender.sendMessage("/manhunt join|leave|respawn|reserve|list|start|event|option|settings|reset|role")
         }
     }
 
@@ -68,6 +73,48 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
         if (!enabled && rule == Rule.HUNT) session.huntCountdownEnd.clear()
         if (!enabled && rule == Rule.COMBAT) session.combatCountdownEnd = null
         player.sendMessage("${rule.label}已${if (enabled) "开启" else "关闭"}。")
+    }
+
+    private fun option(player: Player, raw: String?, state: String?) {
+        val session = plugin.session
+        if (raw == null) {
+            player.sendMessage("逃生仓库${if (session.runnerChestEnabled) "开" else "关"}，金疮药${if (session.medicineEnabled) "开" else "关"}")
+            player.sendMessage("/manhunt option chest|medicine on|off")
+            return
+        }
+        if (session.phase != Phase.LOBBY) {
+            player.sendMessage(Component.text("游戏已经开始，不能修改。").color(NamedTextColor.RED))
+            return
+        }
+        val enabled = when (state) {
+            "on", "开" -> true
+            "off", "关" -> false
+            else -> {
+                player.sendMessage("/manhunt option $raw on|off")
+                return
+            }
+        }
+        when (raw) {
+            "chest" -> {
+                session.runnerChestEnabled = enabled
+                if (!enabled) session.medicineEnabled = false
+                player.sendMessage("逃生仓库已${if (enabled) "开启" else "关闭"}。")
+                if (!enabled) player.sendMessage("金疮药已关闭。")
+            }
+            "medicine" -> {
+                if (enabled && !session.runnerChestEnabled) {
+                    player.sendMessage(Component.text("需要先开启逃生仓库。").color(NamedTextColor.RED))
+                    return
+                }
+                session.medicineEnabled = enabled
+                player.sendMessage("金疮药已${if (enabled) "开启" else "关闭"}。")
+            }
+            else -> {
+                player.sendMessage("/manhunt option chest|medicine on|off")
+                return
+            }
+        }
+        publishBalance(false)
     }
 
     private fun join(player: Player, team: String?) {
@@ -200,9 +247,9 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
             plugin.progress.retargetCompass(player, "village", skipCurrent = false, announce = false)
         }
         if (!session.rallyUsed && player.inventory.contents.none { it != null && Gear.isRally(it) }) {
-            player.inventory.addItem(Gear.rallyItem())
+            Gear.giveToBackpack(player, Gear.rallyItem())
         }
-        if (player.inventory.contents.none { it != null && Gear.isRunnerChest(it) }) {
+        if (session.runnerChestEnabled && player.inventory.contents.none { it != null && Gear.isRunnerChest(it) }) {
             player.inventory.addItem(Gear.runnerChest())
         }
     }
@@ -262,16 +309,19 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
         player.sendMessage("逃生：${names[Role.RUNNER]?.joinToString().orEmpty()}")
         player.sendMessage("旁观：${names[Role.SPECTATOR]?.joinToString().orEmpty()}")
         player.sendMessage("复活 ${session.respawnSeconds} 秒，备用血 ${session.reserveMax}")
+        player.sendMessage("逃生仓库${if (session.runnerChestEnabled) "开" else "关"}，金疮药${if (session.medicineEnabled) "开" else "关"}")
     }
 
     override fun suggest(stack: CommandSourceStack, args: Array<String>): List<String> {
-        if (args.size == 1) return listOf("join", "leave", "respawn", "reserve", "list", "start", "route", "xp", "chest", "event", "reset", "role").filter { it.startsWith(args[0]) }
+        if (args.size == 1) return listOf("join", "leave", "respawn", "reserve", "list", "start", "route", "xp", "chest", "event", "option", "settings", "reset", "role").filter { it.startsWith(args[0]) }
+        if (args.size == 2 && args[0] == "option") return listOf("chest", "medicine").filter { it.startsWith(args[1]) }
+        if (args.size == 3 && args[0] == "option") return listOf("on", "off").filter { it.startsWith(args[2]) }
         if (args.size == 2 && args[0] == "event") return Rule.entries.map { it.id }.filter { it.startsWith(args[1]) }
         if (args.size == 3 && args[0] == "event") return listOf("on", "off").filter { it.startsWith(args[2]) }
         if (args.size == 2 && args[0] == "join") return listOf("hunter", "runner", "spectator").filter { it.startsWith(args[1]) }
         if (args.size == 2 && args[0] == "role") return Bukkit.getOnlinePlayers().map { it.name }.filter { it.startsWith(args[1], true) }
         if (args.size == 3 && args[0] == "role") return listOf("hunter", "runner", "spectator").filter { it.startsWith(args[2]) }
-        if (args.size == 2 && args[0] == "reserve") return listOf("300").filter { it.startsWith(args[1]) }
+        if (args.size == 2 && args[0] == "reserve") return listOf(plugin.session.reserveBase().toString()).filter { it.startsWith(args[1]) }
         if (args.size == 2 && args[0] == "route") return listOf("nether", "trial", "ancient", "mineshaft").filter { it.startsWith(args[1]) }
         if (args.size == 2 && args[0] == "xp") return listOf("deposit", "withdraw").filter { it.startsWith(args[1]) }
         return emptyList()

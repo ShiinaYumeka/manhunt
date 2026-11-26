@@ -44,6 +44,7 @@ object Match {
             .append(Component.text("[加入猎人]").color(NamedTextColor.RED).clickEvent(ClickEvent.runCommand("/manhunt join hunter")))
             .append(Component.text(" "))
             .append(Component.text("[加入逃生]").color(NamedTextColor.GREEN).clickEvent(ClickEvent.runCommand("/manhunt join runner"))))
+        SettingsMenu.prompt(player)
     }
 
     fun start(plugin: Manhunt) {
@@ -54,7 +55,9 @@ object Match {
             Bukkit.broadcast(Component.text("至少需要一名猎人和一名逃生。").color(NamedTextColor.RED))
             return
         }
-        session.adaptBalance(true)?.let { Bukkit.broadcast(Component.text(it).color(NamedTextColor.YELLOW)) }
+        session.adaptBalance(true)
+        session.matchSettings().forEach { Bukkit.broadcast(Component.text(it).color(NamedTextColor.YELLOW)) }
+        SettingsMenu.closeAll()
         session.phase = Phase.COUNTDOWN
         val world = Bukkit.getWorlds().first { it.environment == World.Environment.NORMAL }
         Bukkit.getWorlds().forEach {
@@ -91,7 +94,7 @@ object Match {
                 }
             }
         }
-        val overflow = session.grantMedicines(2)
+        val overflow = if (session.medicineEnabled) session.grantMedicines(2) else 0
         if (overflow > 0) {
             Bukkit.broadcast(Component.text("金疮药超过逃生人数，每人恢复备用血量 ${25 * overflow}。").color(NamedTextColor.GOLD))
         }
@@ -118,8 +121,8 @@ object Match {
             absorb(player)
             player.addPotionEffect(PotionEffect(PotionEffectType.RESISTANCE, 30 * 60 * 20, 0, false, true, true))
             player.inventory.addItem(Gear.runnerCompass())
-            player.inventory.addItem(Gear.rallyItem())
-            player.inventory.addItem(Gear.runnerChest())
+            Gear.giveToBackpack(player, Gear.rallyItem())
+            if (session.runnerChestEnabled) player.inventory.addItem(Gear.runnerChest())
             plugin.progress.award(player, "start")
         }
         for (hunter in session.hunters()) {

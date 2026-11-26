@@ -33,6 +33,7 @@ class Ticker(private val plugin: Manhunt) {
     fun tick() {
         val session = plugin.session
         if (session.phase != Phase.PLAYING) {
+            if (session.phase == Phase.LOBBY) shina.manhunt.game.SettingsMenu.tick()
             board.refresh()
             return
         }
@@ -256,6 +257,7 @@ class Ticker(private val plugin: Manhunt) {
 
     fun openRunnerChest(player: Player) {
         val session = plugin.session
+        if (!session.runnerChestEnabled) return
         if (session.phase != Phase.PLAYING || session.role(player.uniqueId) != shina.manhunt.game.Role.RUNNER) return
         if (player.uniqueId in session.eliminated || player.gameMode == GameMode.SPECTATOR) return
         val blocked = session.hunters().any { hunter ->
@@ -267,12 +269,13 @@ class Ticker(private val plugin: Manhunt) {
             player.warnTitle("无法打开", "附近 40 格内有猎人")
             return
         }
-        Gear.placeMedicines(session.runnerChest, session.medicines)
+        if (session.medicineEnabled) Gear.placeMedicines(session.runnerChest, session.medicines)
         player.openInventory(session.runnerChest)
     }
 
     fun useMedicine(player: Player) {
         val session = plugin.session
+        if (!session.medicineEnabled) return
         if (session.phase != Phase.PLAYING || session.role(player.uniqueId) != shina.manhunt.game.Role.RUNNER) return
         if (player.uniqueId in session.eliminated || player.gameMode == GameMode.SPECTATOR || player.uniqueId in session.downed) {
             player.warnTitle("无法使用", "当前状态不能自疗")
@@ -333,6 +336,7 @@ class Ticker(private val plugin: Manhunt) {
     }
 
     private fun ensureRunnerChest(player: Player) {
+        if (!plugin.session.runnerChestEnabled) return
         if (player.inventory.contents.any { it != null && Gear.isRunnerChest(it) }) return
         player.inventory.addItem(Gear.runnerChest())
     }

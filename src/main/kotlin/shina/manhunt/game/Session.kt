@@ -77,9 +77,11 @@ class StructureMark(
 class Session(val plugin: Manhunt) {
     var phase = Phase.LOBBY
     var respawnSeconds = 30
-    var reserveMax = 300
+    var reserveMax = 400
     var respawnLocked = false
     var reserveLocked = false
+    var runnerChestEnabled = true
+    var medicineEnabled = false
     var medicines = 0
     val healingUntil = mutableMapOf<UUID, Long>()
     val reserveInitial = mutableMapOf<UUID, Int>()
@@ -146,13 +148,28 @@ class Session(val plugin: Manhunt) {
             respawnSeconds = (30 + 5 * (hunters - 4) + 5 * (hunters - runners)).coerceAtLeast(1)
         }
         if (!reserveLocked) {
-            reserveMax = (300 + 30 * (hunters - runners)).coerceAtLeast(1)
+            reserveMax = (reserveBase() + 30 * (hunters - runners)).coerceAtLeast(1)
         }
         val title = if (atStart) "开局设置" else "自动设置"
         val respawnMark = if (respawnLocked) "（手动）" else ""
         val reserveMark = if (reserveLocked) "（手动）" else ""
         return "$title：猎人 $hunters，逃生 $runners。复活时间 $respawnSeconds 秒$respawnMark，备用血量 $reserveMax$reserveMark。"
     }
+
+    fun matchSettings(): List<String> {
+        val hunters = Bukkit.getOnlinePlayers().count { role(it.uniqueId) == Role.HUNTER }
+        val runners = Bukkit.getOnlinePlayers().count { role(it.uniqueId) == Role.RUNNER }
+        val respawnMark = if (respawnLocked) "（手动）" else ""
+        val reserveMark = if (reserveLocked) "（手动）" else ""
+        return listOf(
+            "本局设置：猎人 $hunters，逃生 $runners。",
+            "复活时间 $respawnSeconds 秒$respawnMark，备用血量 $reserveMax$reserveMark。",
+            "逃生仓库${if (runnerChestEnabled) "开启" else "关闭"}，金疮药${if (medicineEnabled) "开启" else "关闭"}。",
+            Rule.entries.joinToString("，") { "${it.label}${if (enabled(it)) "开启" else "关闭"}" } + "。"
+        )
+    }
+
+    fun reserveBase(): Int = if (medicineEnabled) 300 else 400
 
     fun livingIds(): Set<UUID> = roles.filter { it.value == Role.RUNNER && it.key !in eliminated }.keys
 
