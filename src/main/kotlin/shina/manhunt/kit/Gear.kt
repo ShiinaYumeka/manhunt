@@ -43,6 +43,7 @@ object Gear {
     private val giftKey get() = NamespacedKey(Manhunt.instance, "gift")
     private val rallyKey get() = NamespacedKey(Manhunt.instance, "rally")
     private val furnaceKey get() = NamespacedKey(Manhunt.instance, "fast_furnace")
+    private val lobbyStarKey get() = NamespacedKey(Manhunt.instance, "lobby_star")
     private val xpButtonKey get() = NamespacedKey(Manhunt.instance, "xp_button")
     private val xpDepositKey get() = NamespacedKey(Manhunt.instance, "xp_deposit")
     private val xpWithdrawKey get() = NamespacedKey(Manhunt.instance, "xp_withdraw")
@@ -58,6 +59,7 @@ object Gear {
     fun isMedicine(item: ItemStack?): Boolean = item?.itemMeta?.persistentDataContainer?.has(medicineKey, PersistentDataType.BYTE) == true
     fun isGift(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(giftKey, PersistentDataType.STRING) == true
     fun isRally(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(rallyKey, PersistentDataType.BYTE) == true
+    fun isLobbyStar(item: ItemStack?): Boolean = item?.itemMeta?.persistentDataContainer?.has(lobbyStarKey, PersistentDataType.BYTE) == true
     fun isFastFurnace(item: ItemStack): Boolean = item.itemMeta?.persistentDataContainer?.has(furnaceKey, PersistentDataType.BYTE) == true
     fun isXpButton(item: ItemStack?): Boolean {
         val data = item?.itemMeta?.persistentDataContainer ?: return false
@@ -100,6 +102,14 @@ object Gear {
         item.itemMeta = meta
         mark(item, xpButtonKey)
         return item
+    }
+
+    fun lobbyStar(): ItemStack = named(Material.NETHER_STAR, "游戏面板", NamedTextColor.GOLD).also {
+        val meta = it.itemMeta
+        meta.lore(listOf(text("右键打开面板", NamedTextColor.GRAY), text("不能丢出", NamedTextColor.GRAY)))
+        meta.setEnchantmentGlintOverride(true)
+        it.itemMeta = meta
+        mark(it, lobbyStarKey)
     }
 
     fun hunterCompass(): ItemStack = named(Material.COMPASS, "猎人指南针", NamedTextColor.RED).also {

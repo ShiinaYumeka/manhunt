@@ -35,6 +35,8 @@ import org.bukkit.event.entity.EntityRegainHealthEvent
 import org.bukkit.event.entity.PlayerDeathEvent
 import org.bukkit.event.inventory.ClickType
 import org.bukkit.event.inventory.CraftItemEvent
+import org.bukkit.event.inventory.InventoryAction
+import org.bukkit.event.inventory.InventoryType
 import org.bukkit.event.inventory.FurnaceStartSmeltEvent
 import org.bukkit.event.inventory.PrepareItemCraftEvent
 import org.bukkit.event.inventory.InventoryClickEvent
@@ -46,6 +48,7 @@ import org.bukkit.event.player.PlayerDropItemEvent
 import org.bukkit.event.player.PlayerInteractEntityEvent
 import org.bukkit.event.player.PlayerInteractEvent
 import org.bukkit.event.player.PlayerJoinEvent
+import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.event.world.WorldLoadEvent
 import org.bukkit.GameRules
 import org.bukkit.event.player.PlayerMoveEvent
@@ -60,10 +63,14 @@ import org.bukkit.inventory.ItemStack
 import org.bukkit.loot.Lootable
 import org.bukkit.potion.PotionEffect
 import org.bukkit.potion.PotionEffectType
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.event.ClickEvent
+import net.kyori.adventure.text.format.NamedTextColor
 import shina.manhunt.Manhunt
 import shina.manhunt.game.Match
 import shina.manhunt.game.Phase
 import shina.manhunt.game.Role
+import shina.manhunt.game.SettingsMenu
 import shina.manhunt.game.RunnerChestHolder
 import shina.manhunt.game.TeamChestHolder
 import shina.manhunt.kit.Gear
@@ -80,13 +87,34 @@ class GameListener(private val plugin: Manhunt) : Listener {
     @EventHandler
     fun onJoin(event: PlayerJoinEvent) {
         val session = plugin.session
-        if (session.phase == Phase.LOBBY) Match.joinMessage(event.player)
-        else if (session.role(event.player.uniqueId) == null) event.player.sendMessage("使用 /manhunt join spectator 加入旁观。")
-        if (session.phase != Phase.LOBBY && session.role(event.player.uniqueId) == Role.SPECTATOR) {
-            event.player.gameMode = GameMode.SPECTATOR
+        val player = event.player
+        if (session.phase == Phase.LOBBY) {
+            Match.joinMessage(player)
+            SettingsMenu.afterRosterChange()
+        } else if (session.role(player.uniqueId) == null) {
+            player.sendMessage(Component.text("可以加入旁观。 ")
+                .append(Component.text("[加入旁观]").color(NamedTextColor.AQUA).clickEvent(ClickEvent.runCommand("/manhunt join spectator"))))
         }
+        if (session.phase != Phase.LOBBY && session.role(player.uniqueId) == Role.SPECTATOR) {
+            player.gameMode = GameMode.SPECTATOR
+        }
+        SettingsMenu.syncStar(player)
+        if (session.phase == Phase.ENDED) SettingsMenu.refreshOpen()
         plugin.ticker.syncBoard()
         plugin.ticker.refreshGlowSoon()
+    }
+
+    @EventHandler
+    fun onQuit(event: PlayerQuitEvent) {
+        val session = plugin.session
+        val id = event.player.uniqueId
+        session.resetAgreed.remove(id)
+        SettingsMenu.forget(id)
+        plugin.server.scheduler.runTask(plugin, Runnable {
+            session.ready.remove(id)
+            if (session.phase == Phase.LOBBY) SettingsMenu.afterRosterChange()
+            if (session.phase == Phase.ENDED) SettingsMenu.afterPlayerLeft()
+        })
     }
 
     @EventHandler
@@ -323,14 +351,28 @@ class GameListener(private val plugin: Manhunt) : Listener {
     fun onUnopenedChestClick(event: PlayerInteractEvent) {
         if (event.action != Action.RIGHT_CLICK_BLOCK) return
         val block = event.clickedBlock ?: return
+        val phase = plugin.session.phase
+        if ((phase == Phase.LOBBY || phase == Phase.ENDED) && Gear.isLobbyStar(event.item)) return
         if (!hunter(event.player) || !unopenedStructureChest(block)) return
         event.setUseInteractedBlock(Event.Result.DENY)
         if (event.player.gameMode != GameMode.SPECTATOR) event.player.warnTitle("无法打开", "战利品还没生成")
     }
 
+    @EventHandler
+    fun onLobbyStarEntity(event: PlayerInteractEntityEvent) {
+        val item = event.player.inventory.getItem(event.hand)
+        if (!Gear.isLobbyStar(item)) return
+        event.isCancelled = true
+        val phase = plugin.session.phase
+        if (phase == Phase.LOBBY || phase == Phase.ENDED) SettingsMenu.open(event.player)
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     fun onUnopenedLootEntity(event: PlayerInteractEntityEvent) {
         val loot = event.rightClicked as? Lootable ?: return
+        val phase = plugin.session.phase
+        val held = event.player.inventory.getItem(event.hand)
+        if ((phase == Phase.LOBBY || phase == Phase.ENDED) && Gear.isLobbyStar(held)) return
         if (loot.lootTable == null || !hunter(event.player)) return
         event.isCancelled = true
         if (event.player.gameMode != GameMode.SPECTATOR) event.player.warnTitle("无法打开", "战利品还没生成")
@@ -348,6 +390,16 @@ class GameListener(private val plugin: Manhunt) : Listener {
     fun onInteract(event: PlayerInteractEvent) {
         if (event.action != Action.RIGHT_CLICK_AIR && event.action != Action.RIGHT_CLICK_BLOCK) return
         val player = event.player
+        if (event.hand == org.bukkit.inventory.EquipmentSlot.HAND && Gear.isLobbyStar(event.item)) {
+            val phase = plugin.session.phase
+            if (phase == Phase.LOBBY || phase == Phase.ENDED) {
+                event.isCancelled = true
+                event.setUseInteractedBlock(Event.Result.DENY)
+                event.setUseItemInHand(Event.Result.DENY)
+                SettingsMenu.open(player)
+                return
+            }
+        }
         if (event.hand == org.bukkit.inventory.EquipmentSlot.OFF_HAND) {
             val off = event.item
             if (off != null && !trackingCompass(player.inventory.itemInMainHand) && trackingCompass(off)) {
@@ -486,18 +538,48 @@ class GameListener(private val plugin: Manhunt) : Listener {
 
     @EventHandler
     fun onDrop(event: PlayerDropItemEvent) {
-        if (Gear.isHunterCompass(event.itemDrop.itemStack)) event.isCancelled = true
+        val item = event.itemDrop.itemStack
+        if (Gear.isHunterCompass(item) || Gear.isLobbyStar(item)) event.isCancelled = true
     }
 
     @EventHandler
     fun onCompassClick(event: InventoryClickEvent) {
         if (event.click != ClickType.DROP && event.click != ClickType.CONTROL_DROP) return
         val item = event.currentItem ?: return
-        if (Gear.isHunterCompass(item)) event.isCancelled = true
+        if (Gear.isHunterCompass(item) || Gear.isLobbyStar(item)) event.isCancelled = true
+    }
+
+    @EventHandler
+    fun onLobbyStarClick(event: InventoryClickEvent) {
+        if (event.view.topInventory.holder is shina.manhunt.game.SettingsHolder) return
+        val currentStar = Gear.isLobbyStar(event.currentItem)
+        val cursorStar = Gear.isLobbyStar(event.cursor)
+        val hotbarStar = event.hotbarButton.takeIf { it >= 0 }?.let { Gear.isLobbyStar(event.whoClicked.inventory.getItem(it)) } == true
+        if (!currentStar && !cursorStar && !hotbarStar) return
+        if (event.click == ClickType.DROP || event.click == ClickType.CONTROL_DROP || event.slot < 0) {
+            event.isCancelled = true
+            return
+        }
+        val own = event.view.type == InventoryType.CRAFTING || event.view.type == InventoryType.CREATIVE
+        val clickedTop = event.clickedInventory != null && event.clickedInventory != event.view.bottomInventory
+        if (clickedTop) {
+            event.isCancelled = true
+            return
+        }
+        if (!own && event.action == InventoryAction.MOVE_TO_OTHER_INVENTORY) event.isCancelled = true
+    }
+
+    @EventHandler
+    fun onLobbyStarDrag(event: InventoryDragEvent) {
+        if (!Gear.isLobbyStar(event.oldCursor)) return
+        val top = event.view.topInventory
+        if (top == event.view.bottomInventory) return
+        if (event.rawSlots.any { it < top.size }) event.isCancelled = true
     }
 
     @EventHandler
     fun onDeath(event: PlayerDeathEvent) {
+        event.drops.removeIf { Gear.isLobbyStar(it) }
         val session = plugin.session
         val player = event.player
         if (session.phase != Phase.PLAYING) return
@@ -521,9 +603,10 @@ class GameListener(private val plugin: Manhunt) : Listener {
     fun onRespawn(event: PlayerRespawnEvent) {
         val session = plugin.session
         val player = event.player
-        if (session.phase != Phase.PLAYING) return
-        if (session.role(player.uniqueId) != Role.HUNTER || player.uniqueId in session.eliminated) return
         plugin.server.scheduler.runTask(plugin, Runnable {
+            SettingsMenu.syncStar(player)
+            if (session.phase != Phase.PLAYING) return@Runnable
+            if (session.role(player.uniqueId) != Role.HUNTER || player.uniqueId in session.eliminated) return@Runnable
             plugin.hunterLoop.beginRespawn(player, opening = !session.early)
             plugin.ticker.refreshGlowSoon()
         })

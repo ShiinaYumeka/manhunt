@@ -14,6 +14,7 @@ class Manhunt : JavaPlugin() {
     lateinit var progress: Progress
     lateinit var hunterLoop: HunterLoop
     lateinit var ticker: Ticker
+    lateinit var commands: ManhuntCommand
 
     override fun onEnable() {
         instance = this
@@ -29,7 +30,8 @@ class Manhunt : JavaPlugin() {
             server.worlds.forEach { shina.manhunt.game.Match.ensureHut(this, it) }
         })
         server.worlds.forEach { it.setGameRule(GameRules.LOCATOR_BAR, false) }
-        registerCommand("manhunt", "猎人游戏", ManhuntCommand(this))
+        commands = ManhuntCommand(this)
+        registerCommand("manhunt", "猎人游戏", commands)
         server.pluginManager.registerEvents(GameListener(this), this)
         server.pluginManager.registerEvents(shina.manhunt.game.SettingsMenu, this)
         server.scheduler.runTaskTimer(this, Runnable { ticker.tick() }, 20L, 20L)

@@ -86,6 +86,9 @@ class Session(val plugin: Manhunt) {
     val healingUntil = mutableMapOf<UUID, Long>()
     val reserveInitial = mutableMapOf<UUID, Int>()
     val roles = mutableMapOf<UUID, Role>()
+    val ready = mutableSetOf<UUID>()
+    var readyCountdownUntil: Long? = null
+    val resetAgreed = mutableSetOf<UUID>()
     val reserve = mutableMapOf<UUID, Int>()
     val eliminated = mutableSetOf<UUID>()
     val downed = mutableSetOf<UUID>()

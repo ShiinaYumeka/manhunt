@@ -43,7 +43,9 @@ object Match {
         player.sendMessage(Component.text("选择阵营： ")
             .append(Component.text("[加入猎人]").color(NamedTextColor.RED).clickEvent(ClickEvent.runCommand("/manhunt join hunter")))
             .append(Component.text(" "))
-            .append(Component.text("[加入逃生]").color(NamedTextColor.GREEN).clickEvent(ClickEvent.runCommand("/manhunt join runner"))))
+            .append(Component.text("[加入逃生]").color(NamedTextColor.GREEN).clickEvent(ClickEvent.runCommand("/manhunt join runner")))
+            .append(Component.text(" "))
+            .append(Component.text("[加入旁观]").color(NamedTextColor.AQUA).clickEvent(ClickEvent.runCommand("/manhunt join spectator"))))
         SettingsMenu.prompt(player)
     }
 
@@ -58,6 +60,7 @@ object Match {
         session.adaptBalance(true)
         session.matchSettings().forEach { Bukkit.broadcast(Component.text(it).color(NamedTextColor.YELLOW)) }
         SettingsMenu.closeAll()
+        SettingsMenu.abandonCountdown()
         session.phase = Phase.COUNTDOWN
         val world = Bukkit.getWorlds().first { it.environment == World.Environment.NORMAL }
         Bukkit.getWorlds().forEach {
@@ -94,6 +97,7 @@ object Match {
                 }
             }
         }
+        SettingsMenu.syncStars()
         val overflow = if (session.medicineEnabled) session.grantMedicines(2) else 0
         if (overflow > 0) {
             Bukkit.broadcast(Component.text("金疮药超过逃生人数，每人恢复备用血量 ${25 * overflow}。").color(NamedTextColor.GOLD))
@@ -187,6 +191,7 @@ object Match {
         val session = plugin.session
         if (session.phase == Phase.ENDED) return
         session.phase = Phase.ENDED
+        SettingsMenu.endSession()
         Bukkit.broadcast(Component.text("猎人胜利。").color(NamedTextColor.RED))
         val title = Title.title(
             Component.text("猎人胜利", NamedTextColor.RED),
@@ -207,6 +212,7 @@ object Match {
         val session = plugin.session
         if (session.phase != Phase.PLAYING) return
         session.phase = Phase.ENDED
+        SettingsMenu.endSession()
         Bukkit.broadcast(Component.text("逃生胜利。").color(NamedTextColor.GREEN))
         showStats(plugin)
     }
@@ -252,7 +258,7 @@ object Match {
         val loc = player.location
         val inventory = player.inventory
         for (stack in inventory.storageContents + inventory.armorContents + inventory.extraContents) {
-            if (stack == null || stack.type == Material.AIR) continue
+            if (stack == null || stack.type == Material.AIR || Gear.isLobbyStar(stack)) continue
             player.world.dropItemNaturally(loc, stack.clone())
         }
         inventory.clear()
