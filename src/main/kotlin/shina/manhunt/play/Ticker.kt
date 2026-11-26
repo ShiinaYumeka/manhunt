@@ -32,8 +32,8 @@ class Ticker(private val plugin: Manhunt) {
 
     fun tick() {
         val session = plugin.session
+        shina.manhunt.game.SettingsMenu.tick()
         if (session.phase != Phase.PLAYING) {
-            if (session.phase == Phase.LOBBY) shina.manhunt.game.SettingsMenu.tick()
             board.refresh()
             return
         }

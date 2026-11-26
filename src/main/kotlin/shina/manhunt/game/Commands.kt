@@ -17,107 +17,127 @@ import shina.manhunt.play.setCrawling
 class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
     override fun execute(stack: CommandSourceStack, args: Array<String>) {
         val sender = stack.sender
-        if (args.getOrNull(0) == "reset") {
-            MapReset.request(plugin, sender)
-            return
-        }
-        if (args.getOrNull(0) == "role") {
-            setRole(sender, args.getOrNull(1), args.getOrNull(2))
-            return
+        when (args.getOrNull(0)) {
+            "reset" -> {
+                MapReset.request(plugin, sender)
+                return
+            }
+            "role" -> {
+                setRole(sender, args.getOrNull(1), args.getOrNull(2))
+                return
+            }
+            "respawn" -> {
+                setRespawn(sender, args.getOrNull(1))
+                return
+            }
+            "reserve" -> {
+                setReserve(sender, args.getOrNull(1))
+                return
+            }
+            "option" -> {
+                option(sender, args.getOrNull(1), args.getOrNull(2))
+                return
+            }
+            "event" -> {
+                event(sender, args.getOrNull(1), args.getOrNull(2))
+                return
+            }
+            "start" -> {
+                SettingsMenu.forceStart(sender)
+                return
+            }
+            "list" -> {
+                if (sender !is Player) {
+                    sender.sendMessage("只能由玩家使用。")
+                    return
+                }
+                list(sender)
+                return
+            }
         }
         if (sender !is Player) {
-            sender.sendMessage("只能由玩家使用。")
+            if (args.isEmpty()) help(sender) else sender.sendMessage("只能由玩家使用。")
             return
         }
         val session = plugin.session
         when (args.getOrNull(0)) {
             "join" -> join(sender, args.getOrNull(1))
             "leave" -> leave(sender)
-            "respawn" -> setRespawn(sender, args.getOrNull(1))
-            "reserve" -> setReserve(sender, args.getOrNull(1))
-            "list" -> list(sender)
-            "start" -> {
-                if (session.phase != Phase.LOBBY) sender.sendMessage(Component.text("游戏已经开始。").color(NamedTextColor.RED))
-                else Match.start(plugin)
-            }
             "route" -> plugin.progress.chooseRoute(sender, args.getOrNull(1))
             "xp" -> plugin.hunterLoop.xp(sender, args.getOrNull(1))
             "chest" -> plugin.hunterLoop.openChest(sender)
-            "event" -> event(sender, args.getOrNull(1), args.getOrNull(2))
-            "option" -> option(sender, args.getOrNull(1), args.getOrNull(2))
             "settings" -> {
-                if (session.phase != Phase.LOBBY) sender.sendMessage(Component.text("现在不能打开设置。").color(NamedTextColor.RED))
+                if (session.phase != Phase.LOBBY && session.phase != Phase.ENDED) sender.sendMessage(Component.text("现在不能打开面板。").color(NamedTextColor.RED))
                 else SettingsMenu.open(sender)
             }
-            else -> sender.sendMessage("/manhunt join|leave|respawn|reserve|list|start|event|option|settings|reset|role")
+            else -> help(sender)
         }
     }
 
-    private fun event(player: Player, raw: String?, state: String?) {
+    private fun help(sender: CommandSender) {
+        sender.sendMessage("/manhunt join|leave|respawn|reserve|list|start|route|xp|chest|event|option|settings|reset|role")
+        sender.sendMessage("route、xp、chest 是对局中的指令。")
+    }
+
+    private fun canEdit(sender: CommandSender): Boolean {
+        if (sender is Player && !sender.isOp) {
+            sender.sendMessage(Component.text("只有管理员可以修改设置。").color(NamedTextColor.RED))
+            return false
+        }
+        return true
+    }
+
+    private fun event(sender: CommandSender, raw: String?, state: String?) {
         val session = plugin.session
         val rule = Rule.from(raw)
         if (rule == null) {
-            player.sendMessage(session.rules.entries.joinToString("，") { "${it.key.label}${if (it.value) "开" else "关"}" })
-            player.sendMessage("/manhunt event hunt|combat|fire|lock on|off")
+            sender.sendMessage(session.rules.entries.joinToString("，") { "${it.key.label}${if (it.value) "开" else "关"}" })
+            sender.sendMessage("/manhunt event hunt|combat|fire|lock on|off")
             return
         }
         val enabled = when (state) {
             "on", "开" -> true
             "off", "关" -> false
             else -> {
-                player.sendMessage("/manhunt event ${rule.id} on|off")
+                sender.sendMessage("/manhunt event ${rule.id} on|off")
                 return
             }
         }
-        session.rules[rule] = enabled
-        if (!enabled && rule == Rule.HUNT) session.huntCountdownEnd.clear()
-        if (!enabled && rule == Rule.COMBAT) session.combatCountdownEnd = null
-        player.sendMessage("${rule.label}已${if (enabled) "开启" else "关闭"}。")
+        if (!canEdit(sender)) return
+        SettingsMenu.commitRule(rule, enabled)
     }
 
-    private fun option(player: Player, raw: String?, state: String?) {
+    private fun option(sender: CommandSender, raw: String?, state: String?) {
         val session = plugin.session
         if (raw == null) {
-            player.sendMessage("逃生仓库${if (session.runnerChestEnabled) "开" else "关"}，金疮药${if (session.medicineEnabled) "开" else "关"}")
-            player.sendMessage("/manhunt option chest|medicine on|off")
-            return
-        }
-        if (session.phase != Phase.LOBBY) {
-            player.sendMessage(Component.text("游戏已经开始，不能修改。").color(NamedTextColor.RED))
+            sender.sendMessage("逃生仓库${if (session.runnerChestEnabled) "开" else "关"}，金疮药${if (session.medicineEnabled) "开" else "关"}")
+            sender.sendMessage("/manhunt option chest|medicine on|off")
             return
         }
         val enabled = when (state) {
             "on", "开" -> true
             "off", "关" -> false
             else -> {
-                player.sendMessage("/manhunt option $raw on|off")
+                sender.sendMessage("/manhunt option $raw on|off")
                 return
             }
+        }
+        if (raw != "chest" && raw != "medicine") {
+            sender.sendMessage("/manhunt option chest|medicine on|off")
+            return
+        }
+        if (!canEdit(sender)) return
+        if (session.phase != Phase.LOBBY) {
+            sender.sendMessage(Component.text("游戏已经开始，不能修改。").color(NamedTextColor.RED))
+            return
         }
         when (raw) {
-            "chest" -> {
-                session.runnerChestEnabled = enabled
-                if (!enabled) session.medicineEnabled = false
-                player.sendMessage("逃生仓库已${if (enabled) "开启" else "关闭"}。")
-                if (!enabled) player.sendMessage("金疮药已关闭。")
-            }
-            "medicine" -> {
-                if (enabled && !session.runnerChestEnabled) {
-                    player.sendMessage(Component.text("需要先开启逃生仓库。").color(NamedTextColor.RED))
-                    return
-                }
-                session.medicineEnabled = enabled
-                player.sendMessage("金疮药已${if (enabled) "开启" else "关闭"}。")
-            }
-            else -> {
-                player.sendMessage("/manhunt option chest|medicine on|off")
-                return
-            }
+            "chest" -> SettingsMenu.commitChest(enabled)
+            "medicine" -> SettingsMenu.commitMedicine(sender, enabled)
         }
-        publishBalance(false)
     }
 
-    private fun join(player: Player, team: String?) {
+    fun join(player: Player, team: String?) {
         val session = plugin.session
         val role = when (team) {
             "hunter" -> Role.HUNTER
@@ -184,9 +204,13 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
             if (session.livingIds().isEmpty()) Match.huntersWin(plugin)
             else Match.huntersWinIfAllDown(plugin)
         }
+        if (session.phase == Phase.LOBBY && previous != role) session.ready.remove(player.uniqueId)
         plugin.ticker.syncBoard()
         plugin.ticker.refreshGlowSoon()
-        if (session.phase == Phase.LOBBY) publishBalance(false)
+        if (session.phase == Phase.LOBBY) {
+            publishBalance(false)
+            SettingsMenu.afterRosterChange()
+        } else SettingsMenu.refreshOpen()
     }
 
     private fun releaseRunner(player: Player) {
@@ -260,16 +284,18 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
         Role.SPECTATOR -> "旁观"
     }
 
-    private fun leave(player: Player) {
+    fun leave(player: Player) {
         val session = plugin.session
         if (session.phase != Phase.LOBBY) {
             player.sendMessage(Component.text("现在不能离队。").color(NamedTextColor.RED))
             return
         }
         session.roles.remove(player.uniqueId)
+        session.ready.remove(player.uniqueId)
         plugin.ticker.syncBoard()
         plugin.ticker.refreshGlowSoon()
         publishBalance(false)
+        SettingsMenu.afterRosterChange()
         player.sendMessage("你退出了阵营。")
     }
 
@@ -278,28 +304,32 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
         Bukkit.broadcast(Component.text(text).color(NamedTextColor.YELLOW))
     }
 
-    private fun setRespawn(player: Player, raw: String?) {
-        if (plugin.session.phase != Phase.LOBBY) return
+    private fun setRespawn(sender: CommandSender, raw: String?) {
+        if (!canEdit(sender)) return
+        if (plugin.session.phase != Phase.LOBBY) {
+            sender.sendMessage(Component.text("游戏已经开始，不能修改。").color(NamedTextColor.RED))
+            return
+        }
         val seconds = raw?.toIntOrNull()
         if (seconds == null || seconds < 1) {
-            player.sendMessage("/manhunt respawn <秒>")
+            sender.sendMessage("/manhunt respawn <秒>")
             return
         }
-        plugin.session.respawnSeconds = seconds
-        plugin.session.respawnLocked = true
-        player.sendMessage("猎人复活时间设为 $seconds 秒。这项不再自动调整。")
+        SettingsMenu.commitRespawn(seconds)
     }
 
-    private fun setReserve(player: Player, raw: String?) {
-        if (plugin.session.phase != Phase.LOBBY) return
-        val amount = raw?.toIntOrNull()
-        if (amount == null || amount < 1) {
-            player.sendMessage("/manhunt reserve <点数>")
+    private fun setReserve(sender: CommandSender, raw: String?) {
+        if (!canEdit(sender)) return
+        if (plugin.session.phase != Phase.LOBBY) {
+            sender.sendMessage(Component.text("游戏已经开始，不能修改。").color(NamedTextColor.RED))
             return
         }
-        plugin.session.reserveMax = amount
-        plugin.session.reserveLocked = true
-        player.sendMessage("逃生备用血量设为 $amount。这项不再自动调整。")
+        val amount = raw?.toIntOrNull()
+        if (amount == null || amount < 1) {
+            sender.sendMessage("/manhunt reserve <点数>")
+            return
+        }
+        SettingsMenu.commitReserve(amount)
     }
 
     private fun list(player: Player) {
@@ -310,6 +340,7 @@ class ManhuntCommand(private val plugin: Manhunt) : BasicCommand {
         player.sendMessage("旁观：${names[Role.SPECTATOR]?.joinToString().orEmpty()}")
         player.sendMessage("复活 ${session.respawnSeconds} 秒，备用血 ${session.reserveMax}")
         player.sendMessage("逃生仓库${if (session.runnerChestEnabled) "开" else "关"}，金疮药${if (session.medicineEnabled) "开" else "关"}")
+        player.sendMessage(Rule.entries.joinToString("，") { "${it.label}${if (session.enabled(it)) "开" else "关"}" })
     }
 
     override fun suggest(stack: CommandSourceStack, args: Array<String>): List<String> {
